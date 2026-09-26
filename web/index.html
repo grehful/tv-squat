@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TV 스쿼트</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="app" data-state="paused">
+    <section class="camera">
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div id="camera-msg" class="camera-msg">카메라 준비 중…</div>
+      <div class="depth"><div id="depth-bar"></div></div>
+    </section>
+
+    <section class="panel">
+      <div id="status" class="status">준비 중</div>
+
+      <div class="count">
+        <span id="reps">0</span><span class="slash">/</span><span id="quota">10</span>
+      </div>
+      <div class="progress"><div id="progress-bar"></div></div>
+
+      <div class="timer">
+        <div class="label">남은 시간</div>
+        <div id="remaining">5:00</div>
+      </div>
+
+      <p id="message" class="message"></p>
+
+      <div id="people" class="people"></div>
+
+      <div id="history" class="history"></div>
+
+      <div class="buttons">
+        <button id="btn-pause" type="button">일시정지</button>
+        <button id="btn-resume" type="button">재개 / TV 켜기</button>
+        <button id="btn-reset" type="button">구간 다시 시작</button>
+        <button id="btn-settings" type="button">설정</button>
+        <button id="btn-sound" type="button" aria-pressed="true">소리 켜짐</button>
+      </div>
+      <div id="rule" class="rule"></div>
+      <div id="conn" class="conn"></div>
+    </section>
+  </main>
+
+  <dialog id="settings-dialog">
+    <form id="settings-form" method="dialog">
+      <h2>설정</h2>
+      <label>스쿼트 1개당 시간(초)
+        <input name="seconds_per_squat" type="number" min="3" max="600" step="1" required>
+      </label>
+      <label>검사 주기(분)
+        <input name="window_minutes" type="number" min="0.5" max="120" step="0.5" required>
+      </label>
+      <label>함께 하는 아이 수
+        <input name="players" type="number" min="1" max="4" step="1" required>
+      </label>
+      <p id="quota-preview" class="hint"></p>
+      <label class="check"><input name="auto_turn_on" type="checkbox"> TV가 꺼진 뒤 스쿼트를 채우면 TV 다시 켜기</label>
+      <label class="check"><input name="carry_over" type="checkbox"> 초과한 개수를 다음 구간으로 넘기기</label>
+      <details>
+        <summary>인식 민감도</summary>
+        <label>앉음 기준 무릎 각도(도, 작을수록 깊게 앉아야 함)
+          <input name="down_angle" type="number" min="30" max="170" step="5" required>
+        </label>
+        <label>일어섬 기준 무릎 각도(도)
+          <input name="up_angle" type="number" min="60" max="180" step="5" required>
+        </label>
+      </details>
+      <label>새 부모 PIN (비워두면 그대로)
+        <input name="new_pin" type="password" inputmode="numeric" autocomplete="new-password">
+      </label>
+      <label id="pin-row">현재 PIN
+        <input name="pin" type="password" inputmode="numeric" autocomplete="current-password">
+      </label>
+      <p id="settings-error" class="error"></p>
+      <div class="dialog-buttons">
+        <button value="cancel" formnovalidate type="submit">취소</button>
+        <button id="settings-save" value="save" type="submit">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
