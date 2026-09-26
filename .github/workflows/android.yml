@@ -1,0 +1,27 @@
+name: Android APK
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["android/**", "web/**", "scripts/download_vendor.py", ".github/workflows/android.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aapt apksigner zipalign dalvik-exchange android-sdk-platform-23
+      - name: Test
+        run: |
+          python3 -m unittest discover -s tests
+          node --test tests/*.mjs
+      - name: Build APK
+        run: ./android/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tv-squat-apk
+          path: android/build/tv-squat.apk

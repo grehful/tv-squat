@@ -70,6 +70,31 @@
           <input name="up_angle" type="number" min="60" max="180" step="5" required>
         </label>
       </details>
+      <fieldset class="local-only">
+        <legend>삼성 TV</legend>
+        <div class="tv-tools">
+          <button type="button" data-tv="discover">TV 찾기</button>
+          <span id="tv-found"></span>
+        </div>
+        <label>TV IP 주소
+          <input name="tv_ip" type="text" inputmode="decimal" placeholder="192.168.0.20" autocomplete="off">
+        </label>
+        <label>TV MAC 주소 (TV 켜기용)
+          <input name="tv_mac" type="text" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off">
+        </label>
+        <div class="tv-tools">
+          <button type="button" data-tv="pair">TV 연결(최초 1번)</button>
+          <button type="button" data-tv="off">끄기 테스트</button>
+          <button type="button" data-tv="on">켜기 테스트</button>
+        </div>
+        <p id="tv-message" class="hint"></p>
+      </fieldset>
+      <label class="local-only">카메라
+        <select name="camera">
+          <option value="user">전면 카메라 (화면 보면서)</option>
+          <option value="environment">후면 카메라 (화질 좋음)</option>
+        </select>
+      </label>
       <label>새 부모 PIN (비워두면 그대로)
         <input name="new_pin" type="password" inputmode="numeric" autocomplete="new-password">
       </label>

@@ -16,6 +16,34 @@
 - 같은 공유기(와이파이)에 연결된 **삼성 스마트 TV (2016년 이후 Tizen 모델)**
 - Python 3.9 이상, Chrome/Edge 브라우저
 
+## 📱 안드로이드 앱 (PC 없이 휴대폰만으로)
+
+휴대폰 하나로 카메라 인식 + 타이머 + TV 제어를 모두 합니다. PC 서버가 필요 없어요.
+
+1. APK 설치: `android/build/tv-squat.apk` 를 휴대폰으로 옮겨 설치 (설치 시 "출처를 알 수 없는 앱" 허용 필요)
+   - GitHub의 **Actions → Android APK** 에서 빌드된 APK(`tv-squat-apk`)를 받을 수도 있어요
+2. 앱을 열고 카메라 권한 허용
+3. **[설정] → 삼성 TV → [TV 찾기]** → 목록에서 TV 선택 (IP·MAC 자동 입력)
+4. TV가 켜진 상태에서 **[TV 연결(최초 1번)]** → TV 화면의 허용 팝업에서 **허용**
+5. **[끄기 테스트] / [켜기 테스트]** 로 확인한 뒤 [저장]
+6. 휴대폰을 세워서 아이들 전신이 보이게 두면 끝. 앱이 켜져 있는 동안 화면이 꺼지지 않아요
+
+- 휴대폰과 TV는 **같은 와이파이**에 있어야 합니다.
+- 카메라는 설정에서 전면/후면을 고를 수 있어요 (후면이 화질이 더 좋음).
+- 앱을 끄거나 다른 앱으로 넘어가면 개수가 안 올라가서 결국 TV가 꺼집니다.
+- PC 브라우저에서 `http://localhost:8765/?local` 로 열면 앱과 같은 화면을 가상 TV로 시험해 볼 수 있어요.
+
+APK 직접 빌드 (Ubuntu, Android Studio 불필요):
+
+```bash
+sudo apt-get install -y aapt apksigner zipalign dalvik-exchange android-sdk-platform-23
+./android/build.sh        # → android/build/tv-squat.apk
+```
+
+`android/debug.keystore` 는 시험용 서명 키입니다 (같은 키로 빌드해야 앱을 지우지 않고 업데이트 설치 가능).
+
+## 💻 PC 버전
+
 ## 1. 설치
 
 ```bash
@@ -134,5 +162,5 @@ python scripts/download_vendor.py
 
 ```bash
 python -m unittest discover -s tests
-node --test tests/squat.test.mjs
+node --test tests/*.mjs
 ```

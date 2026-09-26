@@ -1,4 +1,5 @@
 import { MultiPersonCounter } from "./squat.js";
+import { AndroidTv, FakeTv, LocalBackend, ServerBackend } from "./backend.js";
 
 const MP_VERSION = "1.0.1";
 // web/vendor 에 받아둔 파일이 있으면 그걸 쓰고(오프라인), 없으면 CDN에서 받는다
@@ -23,25 +24,21 @@ let soundOn = true;
 try { soundOn = localStorage.getItem("tvsquat.sound") !== "off"; } catch {}
 const counter = new MultiPersonCounter();
 
-// ---------- 서버 통신 ----------
+// 안드로이드 앱 안이거나 ?local 이면 서버 없이 이 기기에서 판정 (?local 은 가상 TV로 시험)
+const nativeTv = window.AndroidTv ? new AndroidTv(window.AndroidTv) : null;
+const backend = nativeTv || new URLSearchParams(location.search).has("local")
+  ? new LocalBackend(nativeTv || new FakeTv())
+  : new ServerBackend();
+document.body.dataset.mode = backend.local ? "local" : "server";
 
-async function api(path, body) {
-  const res = await fetch(path, body === undefined ? {} : {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
-}
+// ---------- 서버 통신 ----------
 
 async function flushReps() {
   if (!pendingReps) return;
   const n = pendingReps;
   pendingReps = 0;
   try {
-    applyState(await api("/api/rep", { count: n }));
+    applyState(await backend.addReps(n));
   } catch {
     pendingReps += n; // 서버가 잠깐 끊겨도 개수를 잃지 않게
   }
@@ -50,7 +47,7 @@ async function flushReps() {
 async function poll() {
   try {
     await flushReps();
-    applyState(await api("/api/state"));
+    applyState(await backend.state());
     $("conn").textContent = "";
   } catch {
     $("conn").textContent = "⚠ 서버에 연결할 수 없어요 (python -m tvsquat 실행 중인지 확인)";
@@ -77,7 +74,10 @@ function applyState(s) {
   if (!settings || settings.down_angle !== newSettings.down_angle || settings.up_angle !== newSettings.up_angle) {
     counter.setThresholds(newSettings.down_angle, newSettings.up_angle);
   }
+  const cameraChanged = settings && newSettings.camera && settings.camera !== newSettings.camera;
   settings = newSettings;
+  if (cameraChanged && video.srcObject) initCamera().catch((e) => console.error(e));
+  if (s.tv_status) renderTvStatus(s.tv_status);
 
   $("app").dataset.state = s.state;
   const locked = s.state === "locked";
@@ -128,7 +128,9 @@ function applyState(s) {
 }
 
 function say(text) {
-  if (!soundOn || !("speechSynthesis" in window)) return;
+  if (!soundOn) return;
+  if (nativeTv) return nativeTv.speak(text); // 안드로이드 WebView에는 speechSynthesis가 없음
+  if (!("speechSynthesis" in window)) return;
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "ko-KR";
   speechSynthesis.cancel();
@@ -157,7 +159,7 @@ function onRep() {
     const locked = state.state === "locked";
     const next = (locked ? state.unlock_reps : state.reps) + pendingReps;
     $("reps").textContent = next;
-    if (soundOn && "speechSynthesis" in window) say(String(next));
+    if (soundOn && (nativeTv || "speechSynthesis" in window)) say(String(next));
     else beep();
   }
   $("app").classList.remove("flash");
@@ -206,11 +208,15 @@ async function initPose() {
 }
 
 async function initCamera() {
+  video.srcObject?.getTracks().forEach((t) => t.stop());
+  const facingMode = settings?.camera || "user";
   const stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+    video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode },
     audio: false,
   });
   video.srcObject = stream;
+  // 전면 카메라만 거울처럼 뒤집어서 보여준다
+  $("app").classList.toggle("mirror", facingMode === "user");
   await video.play();
 }
 
@@ -280,7 +286,7 @@ function askPin() {
 async function control(action) {
   const pin = askPin();
   if (pin === null) return;
-  try { applyState(await api("/api/control", { action, pin })); } catch (e) { alert(e.message); }
+  try { applyState(await backend.control(action, pin)); } catch (e) { alert(e.message); }
 }
 
 $("btn-pause").onclick = () => control("pause");
@@ -309,6 +315,11 @@ $("btn-settings").onclick = () => {
   for (const key of ["seconds_per_squat", "window_minutes", "players", "down_angle", "up_angle"]) {
     form[key].value = settings[key];
   }
+  if (backend.local) {
+    form.tv_ip.value = settings.tv_ip;
+    form.tv_mac.value = settings.tv_mac;
+    form.camera.value = settings.camera;
+  }
   form.auto_turn_on.checked = settings.auto_turn_on;
   form.carry_over.checked = settings.carry_over;
   form.new_pin.value = "";
@@ -333,12 +344,55 @@ form.addEventListener("submit", async (ev) => {
     pin: form.pin.value,
   };
   if (form.new_pin.value) body.new_pin = form.new_pin.value;
+  if (backend.local) {
+    body.tv_ip = form.tv_ip.value;
+    body.tv_mac = form.tv_mac.value;
+    body.camera = form.camera.value;
+  }
   try {
-    applyState(await api("/api/settings", body));
+    applyState(await backend.updateSettings(body));
     dialog.close();
   } catch (e) {
     $("settings-error").textContent = e.message;
   }
 });
+
+// ---------- TV 도구 (휴대폰 앱) ----------
+
+let lastDiscovered = "";
+function renderTvStatus(st) {
+  $("tv-message").textContent = st.message || "";
+  const list = st.discovered || [];
+  const key = JSON.stringify(list);
+  if (key === lastDiscovered) return;
+  lastDiscovered = key;
+  $("tv-found").innerHTML = "";
+  for (const tv of list) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = `${tv.name || "삼성 TV"} (${tv.ip})`;
+    b.onclick = () => {
+      form.tv_ip.value = tv.ip;
+      if (tv.mac) form.tv_mac.value = tv.mac;
+    };
+    $("tv-found").append(b);
+  }
+}
+
+for (const btn of document.querySelectorAll("[data-tv]")) {
+  btn.onclick = async () => {
+    const action = btn.dataset.tv;
+    try {
+      // 입력한 IP/MAC을 먼저 저장해야 해당 TV로 명령이 간다
+      if (action !== "discover") {
+        applyState(await backend.updateSettings({ tv_ip: form.tv_ip.value, tv_mac: form.tv_mac.value, pin: form.pin.value }));
+      }
+      applyState(await backend.tvAction(action, form.pin.value));
+      $("settings-error").textContent = "";
+    } catch (e) {
+      $("settings-error").textContent = e.message;
+    }
+  };
+}
 
 start();

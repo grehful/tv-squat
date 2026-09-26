@@ -44,8 +44,8 @@ body {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  transform: scaleX(-1); /* 거울처럼 보이게 */
 }
+.mirror .camera video, .mirror .camera canvas { transform: scaleX(-1); /* 거울처럼 보이게 */ }
 .camera-msg {
   position: absolute;
   left: 50%;
@@ -134,12 +134,32 @@ dialog input[type="number"], dialog input[type="password"] {
 }
 dialog .check { display: flex; gap: 8px; align-items: center; }
 details { margin: 12px 0; }
+body:not([data-mode="local"]) .local-only { display: none; }
+fieldset { border: 1px solid #3a4460; border-radius: 12px; margin: 12px 0; }
+dialog input[type="text"], dialog select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  font: inherit;
+  border-radius: 8px;
+  border: 1px solid #3a4460;
+  background: var(--bg);
+  color: var(--text);
+}
+.tv-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#tv-found { display: contents; }
 .hint { color: var(--accent); margin: 0; }
 .error { color: var(--bad); min-height: 1em; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 #settings-save { background: var(--accent); color: #002; }
 
 @media (max-width: 800px) {
-  #app { grid-template-columns: 1fr; }
-  .camera { aspect-ratio: 4 / 3; }
+  /* minmax(0, …) 이 없으면 카메라 영상의 원래 폭(1280px) 때문에 화면 밖으로 넘친다 */
+  #app { grid-template-columns: minmax(0, 1fr); padding: 12px; gap: 12px; }
+  .camera { aspect-ratio: 4 / 3; min-height: 0; }
+  .camera-msg { font-size: 1rem; bottom: 12px; }
+  .panel { padding: 16px; }
+  .status { font-size: 1.5rem; }
+  #remaining { font-size: 2.2rem; }
 }
