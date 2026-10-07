@@ -40,11 +40,18 @@ public final class StockChecker {
         public final Boolean inStock;
         public final String description;
         public final String name;
+        /** 네이버가 로그인 페이지로 보냈을 때 */
+        public final boolean loginRequired;
 
         Result(Boolean inStock, String description, String name) {
+            this(inStock, description, name, false);
+        }
+
+        Result(Boolean inStock, String description, String name, boolean loginRequired) {
             this.inStock = inStock;
             this.description = description;
             this.name = name;
+            this.loginRequired = loginRequired;
         }
     }
 
@@ -68,6 +75,9 @@ public final class StockChecker {
             // 무슨 페이지가 열렸는지(보안 확인 화면 등) 알 수 있게 제목을 붙인다
             Matcher t = TITLE.matcher(html);
             String title = t.find() ? t.group(1).trim() : "제목 없음";
+            if (!isSsg(url) && (title.contains("로그인") || html.contains("nid.naver.com/nidlogin"))) {
+                return new Result(null, "네이버 로그인 필요 → 앱의 [네이버 로그인] 버튼을 눌러주세요", r.name, true);
+            }
             return new Result(null, r.description + " · 페이지 제목: " + title, r.name);
         }
         return r;

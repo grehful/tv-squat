@@ -150,6 +150,23 @@ public class MainActivity extends Activity {
         });
         root.addView(test);
 
+        Button login = new Button(this);
+        login.setText("네이버 로그인");
+        login.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Intent i = new Intent(MainActivity.this, LoginActivity.class);
+                for (String u : MonitorService.urls(prefs)) {
+                    if (!StockChecker.isSsg(u)) {
+                        i.putExtra(LoginActivity.EXTRA_RETURN_URL, u);
+                        break;
+                    }
+                }
+                startActivity(i);
+            }
+        });
+        root.addView(login);
+
         batteryButton = new Button(this);
         batteryButton.setText("배터리 최적화 끄기 (권장)");
         batteryButton.setOnClickListener(new View.OnClickListener() {

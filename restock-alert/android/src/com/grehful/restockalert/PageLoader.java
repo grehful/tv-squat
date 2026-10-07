@@ -117,18 +117,24 @@ final class PageLoader {
         }
     };
 
-    private WebView ensureWebView() {
-        if (webView != null) return webView;
-        CookieManager.getInstance().setAcceptCookie(true);
-        webView = new WebView(context);
-        WebSettings s = webView.getSettings();
+    /** 로그인 화면과 감시용 WebView 를 똑같이 설정한다 (브라우저가 달라 보이면 로그인이 풀릴 수 있다). */
+    static void configure(WebView view) {
+        WebSettings s = view.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
-        s.setLoadsImagesAutomatically(false); // 데이터 절약
-        s.setBlockNetworkImage(true);
         // WebView 표시("; wv")를 빼서 일반 크롬과 같게 보이게 한다
         s.setUserAgentString(s.getUserAgentString().replace("; wv)", ")"));
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+        CookieManager.getInstance().setAcceptCookie(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(view, true);
+    }
+
+    private WebView ensureWebView() {
+        if (webView != null) return webView;
+        webView = new WebView(context);
+        configure(webView);
+        WebSettings s = webView.getSettings();
+        s.setLoadsImagesAutomatically(false); // 데이터 절약
+        s.setBlockNetworkImage(true);
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {

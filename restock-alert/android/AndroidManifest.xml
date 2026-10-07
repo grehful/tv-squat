@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.grehful.restockalert"
-    android:versionCode="2"
-    android:versionName="0.2.0">
+    android:versionCode="3"
+    android:versionName="0.3.0">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
 
@@ -28,6 +28,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".LoginActivity"
+            android:exported="false" />
         <!-- 몇 시간씩 계속 확인해야 해서 시간 제한이 있는 dataSync 대신 specialUse 를 쓴다 -->
         <service
             android:name=".MonitorService"

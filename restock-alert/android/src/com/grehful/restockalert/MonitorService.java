@@ -50,6 +50,7 @@ public class MonitorService extends Service {
     private static final String CH_RUNNING = "running";
     private static final String CH_ALERT = "restock_alert";
     private static final int ID_RUNNING = 1;
+    private static final int ID_LOGIN = 2;
     private static final int ALARM_SECONDS = 60;
     private static final int MAX_LOG_LINES = 40;
 
@@ -125,6 +126,7 @@ public class MonitorService extends Service {
         final PageLoader loader = pages;
         appendLog(prefs, "감시 시작");
         Map<String, Boolean> lastInStock = new HashMap<>();
+        boolean loginNotified = false;
         Random random = new Random();
         int backoff = 0;
 
@@ -142,6 +144,13 @@ public class MonitorService extends Service {
                     StockChecker.Result r = StockChecker.parsePage(url, loader.load(url));
                     String name = r.name != null ? r.name : shortName;
                     status.append("• ").append(name).append(": ").append(r.description).append('\n');
+                    if (r.loginRequired && !loginNotified) {
+                        loginNotified = true;
+                        appendLog(prefs, "네이버 로그인 필요");
+                        notifyLoginNeeded(url);
+                    } else if (!StockChecker.isSsg(url) && r.inStock != null) {
+                        loginNotified = false; // 로그인이 다시 풀리면 또 알려준다
+                    }
                     Boolean before = lastInStock.get(url);
                     if (Boolean.TRUE.equals(r.inStock) && !Boolean.TRUE.equals(before)) {
                         appendLog(prefs, "입고! " + name);
@@ -244,6 +253,20 @@ public class MonitorService extends Service {
     private void updateRunningNotification(String text) {
         if (!running) return;
         getSystemService(NotificationManager.class).notify(ID_RUNNING, runningNotification(text));
+    }
+
+    private void notifyLoginNeeded(String url) {
+        PendingIntent login = PendingIntent.getActivity(this, 3,
+                new Intent(this, LoginActivity.class).putExtra(LoginActivity.EXTRA_RETURN_URL, url),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification n = new Notification.Builder(this, CH_ALERT)
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle("네이버 로그인이 필요해요")
+                .setContentText("눌러서 로그인하면 네이버 상품도 계속 확인합니다")
+                .setContentIntent(login)
+                .setAutoCancel(true)
+                .build();
+        getSystemService(NotificationManager.class).notify(ID_LOGIN, n);
     }
 
     static void alert(Context c, SharedPreferences prefs, String name, String text, String url) {
