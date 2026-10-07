@@ -59,6 +59,7 @@ public class MonitorService extends Service {
     private SharedPreferences prefs;
     private PowerManager.WakeLock wakeLock;
     private Thread worker;
+    private PageLoader pages;
     private volatile boolean running;
 
     public static void start(Context c) {
@@ -108,6 +109,7 @@ public class MonitorService extends Service {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "restockalert:monitor");
             wakeLock.acquire();
+            pages = new PageLoader(this);
             worker = new Thread(new Runnable() {
                 @Override
                 public void run() {
@@ -120,6 +122,7 @@ public class MonitorService extends Service {
     }
 
     private void loop() {
+        final PageLoader loader = pages;
         appendLog(prefs, "감시 시작");
         Map<String, Boolean> lastInStock = new HashMap<>();
         Random random = new Random();
@@ -136,7 +139,7 @@ public class MonitorService extends Service {
                 if (!running) break;
                 String shortName = "상품 " + StockChecker.productNo(url);
                 try {
-                    StockChecker.Result r = StockChecker.check(url);
+                    StockChecker.Result r = StockChecker.parsePage(url, loader.load(url));
                     String name = r.name != null ? r.name : shortName;
                     status.append("• ").append(name).append(": ").append(r.description).append('\n');
                     Boolean before = lastInStock.get(url);
@@ -152,7 +155,7 @@ public class MonitorService extends Service {
                     }
                 } catch (StockChecker.RateLimitedException e) {
                     limited = true;
-                    status.append("• ").append(shortName).append(": 네이버가 접속 제한 (").append(e.getMessage())
+                    status.append("• ").append(shortName).append(": 사이트가 접속 제한 (").append(e.getMessage())
                             .append(")\n");
                 } catch (Exception e) {
                     status.append("• ").append(shortName).append(": 확인 실패 (").append(e.getMessage())
@@ -189,6 +192,8 @@ public class MonitorService extends Service {
         running = false;
         if (worker != null) worker.interrupt();
         worker = null;
+        if (pages != null) pages.destroy();
+        pages = null;
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         wakeLock = null;
     }

@@ -4,21 +4,14 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.Iterator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** 상품 페이지를 받아서 판매 상태를 읽는다. 네이버 스마트스토어와 SSG.COM 을 지원한다. */
 public final class StockChecker {
-    static final String USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (KHTML, like Gecko) "
-                    + "Chrome/129.0.0.0 Mobile Safari/537.36";
-
+    private static final Pattern TITLE = Pattern.compile("<title[^>]*>([^<]*)</title>", Pattern.CASE_INSENSITIVE);
     private static final Pattern PRODUCT_NO = Pattern.compile("/products/(\\d+)");
     private static final Pattern STATE = Pattern.compile(
             "window\\.__PRELOADED_STATE__\\s*=\\s*(\\{.*?\\})\\s*</script>", Pattern.DOTALL);
@@ -35,7 +28,7 @@ public final class StockChecker {
     private static final String[] SOLD_OUT_WORDS = {"일시품절", "품절된 상품", "판매종료", "판매 종료", "판매가 종료"};
     private static final String[] BUY_WORDS = {"바로구매", "구매하기"};
 
-    /** 네이버가 접속을 막았을 때 (HTTP 403/429). */
+    /** 사이트가 접속을 막았을 때 (HTTP 403/429). */
     public static final class RateLimitedException extends IOException {
         public RateLimitedException(int code) {
             super("HTTP " + code);
@@ -68,29 +61,16 @@ public final class StockChecker {
         return m.find() ? m.group(1) : null;
     }
 
-    public static Result check(String url) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(20000);
-        conn.setRequestProperty("User-Agent", USER_AGENT);
-        conn.setRequestProperty("Accept-Language", "ko-KR,ko;q=0.9");
-        conn.setRequestProperty("Accept", "text/html,application/xhtml+xml");
-        conn.setInstanceFollowRedirects(true);
-        try {
-            int code = conn.getResponseCode();
-            if (code == 403 || code == 429) throw new RateLimitedException(code);
-            if (code != 200) throw new IOException("HTTP " + code);
-            try (InputStream in = conn.getInputStream()) {
-                ByteArrayOutputStream buf = new ByteArrayOutputStream();
-                byte[] chunk = new byte[16384];
-                int n;
-                while ((n = in.read(chunk)) > 0) buf.write(chunk, 0, n);
-                String html = buf.toString("UTF-8");
-                return isSsg(url) ? parseSsg(html) : parse(html, productNo(url));
-            }
-        } finally {
-            conn.disconnect();
+    /** PageLoader 가 가져온 페이지에서 판매 상태를 읽는다. */
+    public static Result parsePage(String url, String html) {
+        Result r = isSsg(url) ? parseSsg(html) : parse(html, productNo(url));
+        if (r.inStock == null) {
+            // 무슨 페이지가 열렸는지(보안 확인 화면 등) 알 수 있게 제목을 붙인다
+            Matcher t = TITLE.matcher(html);
+            String title = t.find() ? t.group(1).trim() : "제목 없음";
+            return new Result(null, r.description + " · 페이지 제목: " + title, r.name);
         }
+        return r;
     }
 
     public static Result parse(String html, String productNo) {
