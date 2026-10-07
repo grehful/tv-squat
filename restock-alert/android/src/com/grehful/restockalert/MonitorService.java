@@ -25,10 +25,12 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * 화면이 꺼져 있어도 상품 페이지를 주기적으로 확인하고,
@@ -47,7 +49,7 @@ public class MonitorService extends Service {
     static final String KEY_END_HOUR = "end_hour";
     static final int DEFAULT_START_HOUR = 9;
     static final int DEFAULT_END_HOUR = 22;
-    /** 접속 제한이 이만큼 연달아 나오면 (대기 시간 합계 약 30분) 감시를 스스로 멈춘다. */
+    /** 한 사이트가 이만큼 연달아 막으면 (쉬는 시간 합계 약 1시간 반) 그 사이트 확인을 멈춘다. */
     private static final int MAX_LIMITED_ROUNDS = 5;
 
     static final String ACTION_STOP = "stop";
@@ -142,10 +144,13 @@ public class MonitorService extends Service {
         final PageLoader loader = pages;
         appendLog(prefs, "감시 시작");
         Map<String, Boolean> lastInStock = new HashMap<>();
+        // 사이트별로 따로 쉰다: 한 곳이 막아도 다른 사이트는 계속 확인한다
+        Map<String, Integer> siteBackoff = new HashMap<>();
+        Map<String, Long> siteResumeAt = new HashMap<>();
+        Map<String, Integer> siteLimitedCount = new HashMap<>();
+        Set<String> givenUp = new HashSet<>();
         boolean loginNotified = false;
         Random random = new Random();
-        int backoff = 0;
-        int limitedRounds = 0;
 
         while (running) {
             if (!inActiveHours(prefs, Calendar.getInstance())) {
@@ -156,13 +161,30 @@ public class MonitorService extends Service {
             int interval = Math.max(prefs.getInt(KEY_INTERVAL, DEFAULT_INTERVAL), MIN_INTERVAL);
             StringBuilder status = new StringBuilder();
             status.append("마지막 확인 ").append(now()).append('\n');
-            boolean limited = false;
+            boolean checkedAny = false;
 
             for (String url : urls) {
                 if (!running) break;
+                String site = siteName(url);
                 String shortName = "상품 " + StockChecker.productNo(url);
+                if (givenUp.contains(site)) {
+                    status.append("• ").append(shortName).append(": ").append(site)
+                            .append(" 확인 멈춤 (계속 접속 제한)\n");
+                    continue;
+                }
+                Long resumeAt = siteResumeAt.get(site);
+                if (resumeAt != null && System.currentTimeMillis() < resumeAt) {
+                    long min = Math.max(1, (resumeAt - System.currentTimeMillis() + 59999) / 60000);
+                    status.append("• ").append(shortName).append(": ").append(site)
+                            .append(" 접속 제한으로 쉬는 중 (약 ").append(min).append("분 뒤 다시 확인)\n");
+                    continue;
+                }
+                checkedAny = true;
                 try {
                     StockChecker.Result r = StockChecker.parsePage(url, loader.load(url));
+                    siteBackoff.remove(site);
+                    siteResumeAt.remove(site);
+                    siteLimitedCount.remove(site);
                     String name = r.name != null ? r.name : shortName;
                     status.append("• ").append(name).append(": ").append(r.description).append('\n');
                     if (r.loginRequired && !loginNotified) {
@@ -184,9 +206,23 @@ public class MonitorService extends Service {
                         lastInStock.put(url, r.inStock);
                     }
                 } catch (StockChecker.RateLimitedException e) {
-                    limited = true;
-                    status.append("• ").append(shortName).append(": 사이트가 접속 제한 (").append(e.getMessage())
-                            .append(")\n");
+                    int count = siteLimitedCount.containsKey(site) ? siteLimitedCount.get(site) + 1 : 1;
+                    siteLimitedCount.put(site, count);
+                    if (count >= MAX_LIMITED_ROUNDS) {
+                        givenUp.add(site);
+                        appendLog(prefs, site + " 접속 제한이 계속돼서 " + site + " 확인 멈춤");
+                        notifySiteGivenUp(site);
+                    } else {
+                        // 5분 → 10분 → 20분 → 30분
+                        int prev = siteBackoff.containsKey(site) ? siteBackoff.get(site) : 0;
+                        int backoff = Math.min(Math.max(prev * 2, 300), 1800);
+                        siteBackoff.put(site, backoff);
+                        siteResumeAt.put(site, System.currentTimeMillis() + backoff * 1000L);
+                        appendLog(prefs, site + " 접속 제한 (" + e.getMessage() + "), " + site + "만 "
+                                + (backoff / 60) + "분 쉬기");
+                    }
+                    status.append("• ").append(shortName).append(": ").append(site).append("가 접속 제한 (")
+                            .append(e.getMessage()).append(")\n");
                 } catch (Exception e) {
                     status.append("• ").append(shortName).append(": 확인 실패 (").append(e.getMessage())
                             .append(")\n");
@@ -194,27 +230,44 @@ public class MonitorService extends Service {
                 if (urls.size() > 1) sleep(2000 + random.nextInt(2000));
             }
 
-            if (limited) {
-                limitedRounds++;
-                if (limitedRounds >= MAX_LIMITED_ROUNDS) {
-                    prefs.edit().putString(KEY_STATUS, status.toString().trim()).apply();
-                    stopBecauseBlocked();
-                    return;
-                }
-                backoff = Math.min(Math.max(backoff * 2, 60), 900);
-                status.append("→ ").append(backoff).append("초 쉬었다가 다시 확인\n");
-                appendLog(prefs, "접속 제한됨, " + backoff + "초 대기");
-            } else {
-                backoff = 0;
-                limitedRounds = 0;
+            if (!urls.isEmpty() && allGivenUp(urls, givenUp)) {
+                prefs.edit().putString(KEY_STATUS, status.toString().trim()).apply();
+                stopBecauseBlocked();
+                return;
             }
             prefs.edit().putString(KEY_STATUS, status.toString().trim()).apply();
-            updateRunningNotification(urls.size() + "개 상품 감시 중 · 마지막 확인 " + now());
+            if (checkedAny) updateRunningNotification(urls.size() + "개 상품 감시 중 · 마지막 확인 " + now());
 
             // 일정한 간격으로 두드리면 봇처럼 보이므로 약간의 무작위성을 준다.
-            long wait = backoff > 0 ? backoff * 1000L : interval * 1000L + random.nextInt(interval * 300);
-            sleep(wait);
+            sleep(interval * 1000L + random.nextInt(interval * 300));
         }
+    }
+
+    static String siteName(String url) {
+        return StockChecker.isSsg(url) ? "SSG" : "네이버";
+    }
+
+    private static boolean allGivenUp(List<String> urls, Set<String> givenUp) {
+        for (String u : urls) {
+            if (!givenUp.contains(siteName(u))) return false;
+        }
+        return true;
+    }
+
+    private void notifySiteGivenUp(String site) {
+        PendingIntent open = PendingIntent.getActivity(this, 6, new Intent(this, MainActivity.class),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification n = new Notification.Builder(this, CH_ALERT)
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle(site + " 상품 확인을 멈췄어요")
+                .setContentText(site + "가 계속 접속을 막아서 잠시 멈췄어요. 다른 사이트는 계속 확인해요.")
+                .setStyle(new Notification.BigTextStyle().bigText(site + "가 1시간 넘게 계속 접속을 막아서 "
+                        + site + " 상품 확인만 멈췄어요. 다른 사이트는 계속 확인해요. "
+                        + "몇 시간 뒤 감시를 다시 시작하면 " + site + "도 다시 확인해요."))
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build();
+        getSystemService(NotificationManager.class).notify(ID_STOPPED + 10 + Math.abs(site.hashCode() % 10), n);
     }
 
     /** 기다리는 중에 감시 중지나 쉬는 시간 끝 신호가 오면 바로 깬다. */
@@ -289,7 +342,7 @@ public class MonitorService extends Service {
                 .setContentTitle("재입고 감시를 멈췄어요")
                 .setContentText("사이트가 계속 접속을 막고 있어요. 몇 시간 뒤에 다시 시작해 주세요.")
                 .setStyle(new Notification.BigTextStyle().bigText(
-                        "사이트가 30분 넘게 계속 접속을 막고 있어서 감시를 멈췄어요. "
+                        "모든 사이트가 계속 접속을 막고 있어서 감시를 멈췄어요. "
                                 + "몇 시간 쉬었다가 확인 간격을 늘려서 다시 시작해 주세요."))
                 .setContentIntent(open)
                 .setAutoCancel(true)
