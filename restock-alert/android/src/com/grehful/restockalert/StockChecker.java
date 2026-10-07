@@ -13,7 +13,7 @@ import java.util.Iterator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** 스마트스토어 상품 페이지를 받아서 판매 상태를 읽는다. (PC용 restock_alert.py 와 같은 방식) */
+/** 상품 페이지를 받아서 판매 상태를 읽는다. 네이버 스마트스토어와 SSG.COM 을 지원한다. */
 public final class StockChecker {
     static final String USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -23,6 +23,17 @@ public final class StockChecker {
     private static final Pattern STATE = Pattern.compile(
             "window\\.__PRELOADED_STATE__\\s*=\\s*(\\{.*?\\})\\s*</script>", Pattern.DOTALL);
     private static final Pattern STATUS = Pattern.compile("\"productStatusType\"\\s*:\\s*\"(\\w+)\"");
+
+    private static final Pattern SSG_ITEM_ID = Pattern.compile("[?&]itemId=(\\d+)");
+    // SSG 페이지 스크립트의 품절 여부/재고 값 (예: soldOutYn : "Y", "usablInvQty":"0")
+    private static final Pattern SSG_SOLD_OUT = Pattern.compile(
+            "[\"']?(?:soldOutYn|soldoutYn|sldOutYn)[\"']?\\s*[:=]\\s*[\"']([YN])[\"']", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SSG_STOCK = Pattern.compile(
+            "[\"']?usablInvQty[\"']?\\s*[:=]\\s*[\"']?(\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern OG_TITLE = Pattern.compile(
+            "<meta[^>]+property=[\"']og:title[\"'][^>]+content=[\"']([^\"']*)[\"']", Pattern.CASE_INSENSITIVE);
+    private static final String[] SOLD_OUT_WORDS = {"일시품절", "품절된 상품", "판매종료", "판매 종료", "판매가 종료"};
+    private static final String[] BUY_WORDS = {"바로구매", "구매하기"};
 
     /** 네이버가 접속을 막았을 때 (HTTP 403/429). */
     public static final class RateLimitedException extends IOException {
@@ -46,8 +57,14 @@ public final class StockChecker {
 
     private StockChecker() {}
 
+    static boolean isSsg(String url) {
+        return url.contains("ssg.com/");
+    }
+
+    /** 지원하는 상품 주소면 상품 번호, 아니면 null. */
     public static String productNo(String url) {
-        Matcher m = PRODUCT_NO.matcher(url);
+        if (!isSsg(url) && !url.contains("naver.com/")) return null;
+        Matcher m = (isSsg(url) ? SSG_ITEM_ID : PRODUCT_NO).matcher(url);
         return m.find() ? m.group(1) : null;
     }
 
@@ -58,6 +75,7 @@ public final class StockChecker {
         conn.setRequestProperty("User-Agent", USER_AGENT);
         conn.setRequestProperty("Accept-Language", "ko-KR,ko;q=0.9");
         conn.setRequestProperty("Accept", "text/html,application/xhtml+xml");
+        conn.setInstanceFollowRedirects(true);
         try {
             int code = conn.getResponseCode();
             if (code == 403 || code == 429) throw new RateLimitedException(code);
@@ -67,7 +85,8 @@ public final class StockChecker {
                 byte[] chunk = new byte[16384];
                 int n;
                 while ((n = in.read(chunk)) > 0) buf.write(chunk, 0, n);
-                return parse(buf.toString("UTF-8"), productNo(url));
+                String html = buf.toString("UTF-8");
+                return isSsg(url) ? parseSsg(html) : parse(html, productNo(url));
             }
         } finally {
             conn.disconnect();
@@ -102,6 +121,34 @@ public final class StockChecker {
             return new Result("SALE".equals(status), label(status) + " (단순검색)", null);
         }
         return new Result(null, "페이지에서 판매 상태를 찾지 못함", null);
+    }
+
+    /** SSG.COM: 스크립트 값이 있으면 그걸로, 없으면 화면 문구(일시품절/바로구매)로 판단한다. */
+    public static Result parseSsg(String html) {
+        String name = null;
+        Matcher t = OG_TITLE.matcher(html);
+        if (t.find()) name = t.group(1).trim();
+
+        Matcher so = SSG_SOLD_OUT.matcher(html);
+        if (so.find()) {
+            boolean soldOut = "Y".equalsIgnoreCase(so.group(1));
+            return new Result(!soldOut, (soldOut ? "품절" : "판매중") + " (soldOutYn=" + so.group(1) + ")", name);
+        }
+        Matcher q = SSG_STOCK.matcher(html);
+        if (q.find()) {
+            int qty = Integer.parseInt(q.group(1));
+            return new Result(qty > 0, (qty > 0 ? "판매중" : "품절") + " (재고 " + qty + "개)", name);
+        }
+
+        String text = html.replaceAll("(?s)<script.*?</script>|<style.*?</style>", " ")
+                .replaceAll("<[^>]+>", " ");
+        for (String w : SOLD_OUT_WORDS) {
+            if (text.contains(w)) return new Result(false, "품절 ('" + w + "' 문구)", name);
+        }
+        for (String w : BUY_WORDS) {
+            if (text.contains(w)) return new Result(true, "판매중 ('" + w + "' 버튼)", name);
+        }
+        return new Result(null, "페이지에서 판매 상태를 찾지 못함 (" + html.length() + "자)", name);
     }
 
     static String label(String status) {

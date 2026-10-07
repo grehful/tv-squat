@@ -27,7 +27,8 @@ import android.widget.Toast;
 public class MainActivity extends Activity {
     static final String EXTRA_OPEN_URL = "open_url";
     private static final String DEFAULT_URL =
-            "https://m.smartstore.naver.com/moncolle_korea/products/13763561200";
+            "https://m.smartstore.naver.com/moncolle_korea/products/13763561200\n"
+            + "https://m.ssg.com/item/itemView.ssg?itemId=1000881834004&siteNo=6004&salestrNo=6005";
 
     private SharedPreferences prefs;
     private EditText urlsInput;
@@ -110,7 +111,7 @@ public class MainActivity extends Activity {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(title);
 
-        root.addView(label("상품 주소 (여러 개면 한 줄에 하나씩)"));
+        root.addView(label("상품 주소 (스마트스토어·SSG.COM, 여러 개면 한 줄에 하나씩)"));
         urlsInput = new EditText(this);
         urlsInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 | InputType.TYPE_TEXT_VARIATION_URI);
@@ -234,7 +235,7 @@ public class MainActivity extends Activity {
         } else {
             saveSettings();
             if (MonitorService.urls(prefs).isEmpty()) {
-                Toast.makeText(this, "상품 주소를 확인해 주세요 (…/products/숫자 형태)", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "상품 주소를 확인해 주세요 (스마트스토어 또는 SSG.COM 상품 주소)", Toast.LENGTH_LONG).show();
                 return;
             }
             prefs.edit().putString(MonitorService.KEY_STATUS, "첫 확인 중…").apply();
