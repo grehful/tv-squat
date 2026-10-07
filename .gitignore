@@ -5,3 +5,4 @@ settings.json
 tv-token.txt
 web/vendor/
 android/build/
+restock-alert/android/build/

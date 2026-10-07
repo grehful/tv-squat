@@ -1,0 +1,27 @@
+name: Restock Alert APK
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["restock-alert/android/**", ".github/workflows/restock-alert.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aapt apksigner zipalign dalvik-exchange
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/restock-alert
+          key: android-all-14-robolectric-10818077
+      - name: Build APK
+        run: ./restock-alert/android/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: restock-alert-apk
+          path: restock-alert/android/build/restock-alert.apk
