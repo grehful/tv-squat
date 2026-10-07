@@ -43,6 +43,11 @@ javac -nowarn -encoding UTF-8 --release 8 -classpath "$SDK" -d "$OUT/classes" @"
 
 echo "== dex 변환"
 "$DX" --dex --min-sdk-version=26 --output="$OUT/classes.dex" "$OUT/classes"
+# dx 는 람다를 안드로이드에 없는 LambdaMetafactory 호출로 바꿔서 앱이 켜지자마자 죽는다.
+if grep -q LambdaMetafactory "$OUT/classes.dex"; then
+  echo "람다(->, ::)는 쓸 수 없습니다. 익명 클래스로 바꿔 주세요." >&2
+  exit 1
+fi
 
 echo "== APK 묶기"
 aapt package -f -M "$HERE/AndroidManifest.xml" -S "$HERE/res" -I "$SDK" -F "$OUT/unsigned.apk"

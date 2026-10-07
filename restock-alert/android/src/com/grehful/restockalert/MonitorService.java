@@ -13,6 +13,7 @@ import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.media.RingtoneManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -96,14 +97,23 @@ public class MonitorService extends Service {
             return START_NOT_STICKY;
         }
         prefs.edit().putBoolean(KEY_RUNNING, true).apply();
-        startForeground(ID_RUNNING, runningNotification("확인 준비 중"),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        Notification n = runningNotification("확인 준비 중");
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(ID_RUNNING, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        } else {
+            startForeground(ID_RUNNING, n);
+        }
         if (!running) {
             running = true;
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "restockalert:monitor");
             wakeLock.acquire();
-            worker = new Thread(this::loop, "restock-monitor");
+            worker = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    loop();
+                }
+            }, "restock-monitor");
             worker.start();
         }
         return START_STICKY;
@@ -257,12 +267,20 @@ public class MonitorService extends Service {
                 .build();
         c.getSystemService(NotificationManager.class).notify(id, n);
 
-        if (prefs.getBoolean(KEY_ALARM, true)) main.post(() -> startAlarm(c.getApplicationContext()));
+        if (prefs.getBoolean(KEY_ALARM, true)) {
+            final Context app = c.getApplicationContext();
+            main.post(new Runnable() {
+                @Override
+                public void run() {
+                    startAlarm(app);
+                }
+            });
+        }
     }
 
     /** 무음 모드여도 들리도록 알람 소리로 1분간 울린다. */
     private static void startAlarm(Context c) {
-        stopAlarm();
+        STOP_ALARM.run(); // 이미 울리는 알람이 있으면 정리 (메인 스레드에서 바로 실행)
         Uri sound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
         if (sound == null) sound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
         try {
@@ -276,14 +294,16 @@ public class MonitorService extends Service {
             p.prepare();
             p.start();
             alarm = p;
-            main.postDelayed(MonitorService::stopAlarm, ALARM_SECONDS * 1000L);
+            main.postDelayed(STOP_ALARM, ALARM_SECONDS * 1000L);
         } catch (Exception e) {
             appendLog(c.getSharedPreferences(PREFS, MODE_PRIVATE), "알람 소리 재생 실패: " + e.getMessage());
         }
     }
 
-    static void stopAlarm() {
-        main.post(() -> {
+    private static final Runnable STOP_ALARM = new Runnable() {
+        @Override
+        public void run() {
+            main.removeCallbacks(this);
             if (alarm != null) {
                 try {
                     alarm.stop();
@@ -292,7 +312,11 @@ public class MonitorService extends Service {
                 alarm.release();
                 alarm = null;
             }
-        });
+        }
+    };
+
+    static void stopAlarm() {
+        main.post(STOP_ALARM);
     }
 
     // ---- 설정 ----

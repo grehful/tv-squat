@@ -16,6 +16,7 @@ import android.text.InputType;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -38,7 +39,17 @@ public class MainActivity extends Activity {
     private TextView logView;
 
     private final SharedPreferences.OnSharedPreferenceChangeListener listener =
-            (p, key) -> runOnUiThread(this::refresh);
+            new SharedPreferences.OnSharedPreferenceChangeListener() {
+                @Override
+                public void onSharedPreferenceChanged(SharedPreferences p, String key) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            refresh();
+                        }
+                    });
+                }
+            };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -118,21 +129,34 @@ public class MainActivity extends Activity {
 
         startStop = new Button(this);
         startStop.setTextSize(18);
-        startStop.setOnClickListener(v -> toggle());
+        startStop.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggle();
+            }
+        });
         root.addView(startStop);
 
         Button test = new Button(this);
         test.setText("알림 테스트");
-        test.setOnClickListener(v -> {
-            saveSettings();
-            MonitorService.alert(this, prefs, "테스트 상품", "알림 테스트입니다. 입고되면 이렇게 알려드려요.",
-                    firstUrl());
+        test.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                saveSettings();
+                MonitorService.alert(MainActivity.this, prefs, "테스트 상품",
+                        "알림 테스트입니다. 입고되면 이렇게 알려드려요.", firstUrl());
+            }
         });
         root.addView(test);
 
         batteryButton = new Button(this);
         batteryButton.setText("배터리 최적화 끄기 (권장)");
-        batteryButton.setOnClickListener(v -> requestBatteryExemption());
+        batteryButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                requestBatteryExemption();
+            }
+        });
         root.addView(batteryButton);
 
         root.addView(label("현재 상태"));
@@ -174,8 +198,12 @@ public class MainActivity extends Activity {
         urlsInput.setText(prefs.getString(MonitorService.KEY_URLS, DEFAULT_URL));
         intervalInput.setText(String.valueOf(prefs.getInt(MonitorService.KEY_INTERVAL, MonitorService.DEFAULT_INTERVAL)));
         alarmBox.setChecked(prefs.getBoolean(MonitorService.KEY_ALARM, true));
-        alarmBox.setOnCheckedChangeListener((b, checked) ->
-                prefs.edit().putBoolean(MonitorService.KEY_ALARM, checked).apply());
+        alarmBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean checked) {
+                prefs.edit().putBoolean(MonitorService.KEY_ALARM, checked).apply();
+            }
+        });
     }
 
     private void saveSettings() {
