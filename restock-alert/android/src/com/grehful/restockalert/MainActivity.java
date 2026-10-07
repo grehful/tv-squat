@@ -34,6 +34,9 @@ public class MainActivity extends Activity {
     private EditText urlsInput;
     private EditText intervalInput;
     private CheckBox alarmBox;
+    private CheckBox hoursBox;
+    private EditText startHourInput;
+    private EditText endHourInput;
     private Button startStop;
     private Button batteryButton;
     private TextView statusView;
@@ -124,6 +127,19 @@ public class MainActivity extends Activity {
         intervalInput.setInputType(InputType.TYPE_CLASS_NUMBER);
         root.addView(intervalInput);
 
+        hoursBox = new CheckBox(this);
+        hoursBox.setText("정해진 시간에만 확인 (밤에는 쉬기)");
+        root.addView(hoursBox);
+        LinearLayout hoursRow = new LinearLayout(this);
+        hoursRow.setOrientation(LinearLayout.HORIZONTAL);
+        startHourInput = hourInput();
+        endHourInput = hourInput();
+        hoursRow.addView(startHourInput);
+        hoursRow.addView(plain("시부터  "));
+        hoursRow.addView(endHourInput);
+        hoursRow.addView(plain("시까지 (0~23)"));
+        root.addView(hoursRow);
+
         alarmBox = new CheckBox(this);
         alarmBox.setText("입고되면 알람 소리 울리기 (무음 모드에서도)");
         root.addView(alarmBox);
@@ -200,6 +216,29 @@ public class MainActivity extends Activity {
         setContentView(scroll);
     }
 
+    private EditText hourInput() {
+        EditText e = new EditText(this);
+        e.setInputType(InputType.TYPE_CLASS_NUMBER);
+        e.setEms(2);
+        e.setGravity(android.view.Gravity.CENTER);
+        return e;
+    }
+
+    private TextView plain(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        return t;
+    }
+
+    private static int parseHour(EditText e, int fallback) {
+        try {
+            int h = Integer.parseInt(e.getText().toString().trim());
+            return h >= 0 && h <= 23 ? h : fallback;
+        } catch (NumberFormatException ex) {
+            return fallback;
+        }
+    }
+
     private TextView label(String text) {
         TextView t = new TextView(this);
         t.setText(text);
@@ -215,6 +254,9 @@ public class MainActivity extends Activity {
     private void loadSettings() {
         urlsInput.setText(prefs.getString(MonitorService.KEY_URLS, DEFAULT_URL));
         intervalInput.setText(String.valueOf(prefs.getInt(MonitorService.KEY_INTERVAL, MonitorService.DEFAULT_INTERVAL)));
+        hoursBox.setChecked(prefs.getBoolean(MonitorService.KEY_HOURS_ON, false));
+        startHourInput.setText(String.valueOf(prefs.getInt(MonitorService.KEY_START_HOUR, MonitorService.DEFAULT_START_HOUR)));
+        endHourInput.setText(String.valueOf(prefs.getInt(MonitorService.KEY_END_HOUR, MonitorService.DEFAULT_END_HOUR)));
         alarmBox.setChecked(prefs.getBoolean(MonitorService.KEY_ALARM, true));
         alarmBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
@@ -233,10 +275,17 @@ public class MainActivity extends Activity {
         }
         interval = Math.max(interval, MonitorService.MIN_INTERVAL);
         intervalInput.setText(String.valueOf(interval));
+        int startHour = parseHour(startHourInput, MonitorService.DEFAULT_START_HOUR);
+        int endHour = parseHour(endHourInput, MonitorService.DEFAULT_END_HOUR);
+        startHourInput.setText(String.valueOf(startHour));
+        endHourInput.setText(String.valueOf(endHour));
         prefs.edit()
                 .putString(MonitorService.KEY_URLS, urlsInput.getText().toString().trim())
                 .putInt(MonitorService.KEY_INTERVAL, interval)
                 .putBoolean(MonitorService.KEY_ALARM, alarmBox.isChecked())
+                .putBoolean(MonitorService.KEY_HOURS_ON, hoursBox.isChecked())
+                .putInt(MonitorService.KEY_START_HOUR, startHour)
+                .putInt(MonitorService.KEY_END_HOUR, endHour)
                 .apply();
     }
 
@@ -275,6 +324,9 @@ public class MainActivity extends Activity {
         startStop.setText(running ? "■ 감시 중지" : "▶ 감시 시작");
         urlsInput.setEnabled(!running);
         intervalInput.setEnabled(!running);
+        hoursBox.setEnabled(!running);
+        startHourInput.setEnabled(!running);
+        endHourInput.setEnabled(!running);
         statusView.setText(running ? prefs.getString(MonitorService.KEY_STATUS, "") : "멈춤");
         logView.setText(prefs.getString(MonitorService.KEY_LOG, ""));
 

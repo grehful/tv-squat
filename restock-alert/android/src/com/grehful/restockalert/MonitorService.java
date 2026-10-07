@@ -1,5 +1,6 @@
 package com.grehful.restockalert;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -21,6 +22,7 @@ import android.os.PowerManager;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -40,9 +42,17 @@ public class MonitorService extends Service {
     static final String KEY_RUNNING = "running";
     static final String KEY_STATUS = "status";
     static final String KEY_LOG = "log";
+    static final String KEY_HOURS_ON = "hours_on";
+    static final String KEY_START_HOUR = "start_hour";
+    static final String KEY_END_HOUR = "end_hour";
+    static final int DEFAULT_START_HOUR = 9;
+    static final int DEFAULT_END_HOUR = 22;
+    /** 접속 제한이 이만큼 연달아 나오면 (대기 시간 합계 약 30분) 감시를 스스로 멈춘다. */
+    private static final int MAX_LIMITED_ROUNDS = 5;
 
     static final String ACTION_STOP = "stop";
     static final String ACTION_STOP_ALARM = "stop_alarm";
+    private static final String ACTION_WAKE = "wake";
 
     static final int DEFAULT_INTERVAL = 60;
     static final int MIN_INTERVAL = 20;
@@ -51,6 +61,7 @@ public class MonitorService extends Service {
     private static final String CH_ALERT = "restock_alert";
     private static final int ID_RUNNING = 1;
     private static final int ID_LOGIN = 2;
+    private static final int ID_STOPPED = 3;
     private static final int ALARM_SECONDS = 60;
     private static final int MAX_LOG_LINES = 40;
 
@@ -61,6 +72,7 @@ public class MonitorService extends Service {
     private PowerManager.WakeLock wakeLock;
     private Thread worker;
     private PageLoader pages;
+    private final Object waiter = new Object();
     private volatile boolean running;
 
     public static void start(Context c) {
@@ -92,6 +104,10 @@ public class MonitorService extends Service {
             shutdown();
             stopSelf();
             return START_NOT_STICKY;
+        }
+        if (ACTION_WAKE.equals(action) && running) {
+            wakeWorker(); // 쉬는 시간이 끝났다
+            return START_STICKY;
         }
         // 시작 요청, 또는 시스템이 서비스를 다시 살린 경우 (intent == null)
         if (intent == null && !prefs.getBoolean(KEY_RUNNING, false)) {
@@ -129,8 +145,13 @@ public class MonitorService extends Service {
         boolean loginNotified = false;
         Random random = new Random();
         int backoff = 0;
+        int limitedRounds = 0;
 
         while (running) {
+            if (!inActiveHours(prefs, Calendar.getInstance())) {
+                restUntilActiveHours();
+                continue;
+            }
             List<String> urls = urls(prefs);
             int interval = Math.max(prefs.getInt(KEY_INTERVAL, DEFAULT_INTERVAL), MIN_INTERVAL);
             StringBuilder status = new StringBuilder();
@@ -174,11 +195,18 @@ public class MonitorService extends Service {
             }
 
             if (limited) {
+                limitedRounds++;
+                if (limitedRounds >= MAX_LIMITED_ROUNDS) {
+                    prefs.edit().putString(KEY_STATUS, status.toString().trim()).apply();
+                    stopBecauseBlocked();
+                    return;
+                }
                 backoff = Math.min(Math.max(backoff * 2, 60), 900);
                 status.append("→ ").append(backoff).append("초 쉬었다가 다시 확인\n");
                 appendLog(prefs, "접속 제한됨, " + backoff + "초 대기");
             } else {
                 backoff = 0;
+                limitedRounds = 0;
             }
             prefs.edit().putString(KEY_STATUS, status.toString().trim()).apply();
             updateRunningNotification(urls.size() + "개 상품 감시 중 · 마지막 확인 " + now());
@@ -189,16 +217,97 @@ public class MonitorService extends Service {
         }
     }
 
+    /** 기다리는 중에 감시 중지나 쉬는 시간 끝 신호가 오면 바로 깬다. */
     private void sleep(long ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        synchronized (waiter) {
+            if (!running) return;
+            try {
+                waiter.wait(ms);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
+    }
+
+    private void wakeWorker() {
+        synchronized (waiter) {
+            waiter.notifyAll();
+        }
+    }
+
+    static boolean inActiveHours(SharedPreferences prefs, Calendar now) {
+        if (!prefs.getBoolean(KEY_HOURS_ON, false)) return true;
+        int start = prefs.getInt(KEY_START_HOUR, DEFAULT_START_HOUR);
+        int end = prefs.getInt(KEY_END_HOUR, DEFAULT_END_HOUR);
+        return ActiveHours.contains(start, end, now.get(Calendar.HOUR_OF_DAY));
+    }
+
+    /**
+     * 쉬는 시간에는 휴대폰이 잠들 수 있게 wake lock 을 풀고,
+     * 다시 시작할 시각에 AlarmManager 로 깨운다.
+     */
+    private void restUntilActiveHours() {
+        int start = prefs.getInt(KEY_START_HOUR, DEFAULT_START_HOUR);
+        int end = prefs.getInt(KEY_END_HOUR, DEFAULT_END_HOUR);
+        Calendar next = Calendar.getInstance();
+        next.set(Calendar.MINUTE, 0);
+        next.set(Calendar.SECOND, 0);
+        next.set(Calendar.MILLISECOND, 0);
+        next.set(Calendar.HOUR_OF_DAY, start);
+        if (next.getTimeInMillis() <= System.currentTimeMillis()) next.add(Calendar.DAY_OF_MONTH, 1);
+
+        String until = String.format(Locale.KOREA, "%d시", start);
+        String msg = "쉬는 시간 (" + start + "시~" + end + "시에만 확인) · " + until + "에 다시 시작";
+        prefs.edit().putString(KEY_STATUS, msg).apply();
+        updateRunningNotification(msg);
+        appendLog(prefs, "쉬는 시간, " + until + "에 다시 시작");
+
+        PendingIntent wake = PendingIntent.getService(this, 4,
+                new Intent(this, MonitorService.class).setAction(ACTION_WAKE),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        AlarmManager am = getSystemService(AlarmManager.class);
+        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next.getTimeInMillis(), wake);
+
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        // 알람이 늦거나 빠져도 10분마다 시계를 다시 본다
+        while (running && !inActiveHours(prefs, Calendar.getInstance())) {
+            sleep(10 * 60 * 1000L);
+        }
+        am.cancel(wake);
+        if (running && wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire();
+        if (running) appendLog(prefs, "쉬는 시간 끝, 다시 확인 시작");
+    }
+
+    /** 접속 제한이 계속되면 계정/접속이 더 막히기 전에 스스로 멈추고 알려준다. */
+    private void stopBecauseBlocked() {
+        prefs.edit().putBoolean(KEY_RUNNING, false).apply();
+        appendLog(prefs, "접속 제한이 계속돼서 감시를 자동으로 멈춤");
+        PendingIntent open = PendingIntent.getActivity(this, 5, new Intent(this, MainActivity.class),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification n = new Notification.Builder(this, CH_ALERT)
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle("재입고 감시를 멈췄어요")
+                .setContentText("사이트가 계속 접속을 막고 있어요. 몇 시간 뒤에 다시 시작해 주세요.")
+                .setStyle(new Notification.BigTextStyle().bigText(
+                        "사이트가 30분 넘게 계속 접속을 막고 있어서 감시를 멈췄어요. "
+                                + "몇 시간 쉬었다가 확인 간격을 늘려서 다시 시작해 주세요."))
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build();
+        getSystemService(NotificationManager.class).notify(ID_STOPPED, n);
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                shutdown();
+                stopForeground(STOP_FOREGROUND_REMOVE);
+                stopSelf();
+            }
+        });
     }
 
     private void shutdown() {
         running = false;
+        wakeWorker();
         if (worker != null) worker.interrupt();
         worker = null;
         if (pages != null) pages.destroy();
