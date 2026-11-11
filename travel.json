@@ -1,0 +1,53 @@
+{
+  "currency": "KRW",
+  "origin": "ICN",
+  "travelers": { "adults": 2, "children_ages": [], "infants": 0 },
+  "defaults": { "nights": [3, 4], "cabin": "economy", "max_stops": 0, "max_searches": 2, "hotel": true, "rooms": 1 },
+  "trips": [
+    {
+      "name": "도쿄",
+      "destination": "HND,NRT",
+      "hotel_city": "Tokyo",
+      "depart_from": "2027-01-15",
+      "depart_to": "2027-01-25",
+      "airlines": ["KE", "OZ"]
+    },
+    {
+      "name": "오사카",
+      "destination": "KIX",
+      "hotel_city": "Osaka",
+      "depart_from": "2027-02-05",
+      "depart_to": "2027-02-12",
+      "nights": [3]
+    },
+    {
+      "name": "방콕",
+      "destination": "BKK",
+      "hotel_city": "Bangkok",
+      "depart_from": "2027-03-01",
+      "depart_to": "2027-03-10",
+      "nights": [4, 5],
+      "travelers": { "adults": 2, "children_ages": [7] }
+    },
+    {
+      "name": "다낭",
+      "destination": "DAD",
+      "hotel_city": "Da Nang",
+      "depart_from": "2027-04-01",
+      "depart_to": "2027-04-15",
+      "nights": [4],
+      "enabled": false
+    },
+    {
+      "name": "하와이",
+      "destination": "HNL",
+      "hotel_city": "Honolulu",
+      "depart_from": "2027-05-01",
+      "depart_to": "2027-05-20",
+      "nights": [6, 7],
+      "airlines": ["KE", "HA"],
+      "cabin": "business",
+      "enabled": false
+    }
+  ]
+}

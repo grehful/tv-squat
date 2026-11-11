@@ -1,0 +1,43 @@
+name: Travel price alert
+
+on:
+  schedule:
+    # 매일 한국시간 오전 6시 43분 (UTC 21:43). GitHub 사정으로 몇 분~수십 분 늦을 수 있음
+    - cron: "43 21 * * *"
+  workflow_dispatch:
+
+concurrency: travel-alert
+
+jobs:
+  alert:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Restore price history
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: travel-history-${{ github.run_id }}
+          restore-keys: travel-history-
+      - name: Test
+        run: python -m unittest tests.test_travelalert
+      - name: Search prices and notify
+        env:
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python -m travelalert
+      - name: Save price history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: travel-history-${{ github.run_id }}
