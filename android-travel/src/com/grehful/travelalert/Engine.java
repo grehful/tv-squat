@@ -23,6 +23,7 @@ final class Engine {
         List<Prices.Flight> flights = new ArrayList<>(); // 날짜 조합별 최저가, 싼 순
         List<Prices.Hotel> hotels = new ArrayList<>();
         List<String> errors = new ArrayList<>();
+        int searched, checkedCombos, totalCombos;
 
         Prices.Flight best() { return flights.isEmpty() ? null : flights.get(0); }
 
@@ -36,18 +37,49 @@ final class Engine {
         }
     }
 
-    static TripResult search(Prices.Client client, Trip trip, int today) {
+    /**
+     * 여행 하나 검색. cache 는 이 여행의 조합별 최근 확인 결과({조합키: 항공 JSON 또는 {none, checked}})이며
+     * 오늘 검색한 조합이 갱신된다. 결과는 기간 안 모든 조합 중 지금까지 확인한 최저가 순.
+     */
+    static TripResult search(Prices.Client client, Trip trip, int today, JSONObject cache) throws JSONException {
         TripResult r = new TripResult();
         r.trip = trip;
-        for (int[] d : trip.dateOptions(today)) {
+        List<int[]> combos = trip.allCombos(today);
+        for (int[] d : trip.pickToday(today, cache)) {
+            String key = Trip.comboKey(d);
             try {
                 List<Prices.Flight> fl = Prices.parseFlights(client.flights(trip, d[0], d[1]), d[0], d[1]);
-                if (!fl.isEmpty()) r.flights.add(fl.get(0));
+                r.searched++;
+                if (fl.isEmpty()) {
+                    cache.put(key, new JSONObject().put("none", true).put("checked", today));
+                } else {
+                    fl.get(0).checked = today;
+                    cache.put(key, fl.get(0).toJson());
+                }
             } catch (Exception e) {
-                r.errors.add("항공 " + Day.label(d[0]) + ": " + message(e));
+                r.errors.add("항공 " + Day.label(d[0]) + " " + (d[1] - d[0]) + "박: " + message(e));
             }
         }
-        Collections.sort(r.flights, (a, b) -> Integer.compare(a.price, b.price));
+        // 기간에서 빠진(지난) 조합은 지우고, 확인된 가격을 모은다
+        JSONObject keep = new JSONObject();
+        for (int[] d : combos) {
+            String key = Trip.comboKey(d);
+            JSONObject e = cache.optJSONObject(key);
+            if (e == null) continue;
+            keep.put(key, e);
+            r.checkedCombos++;
+            if (e.has("price")) r.flights.add(Prices.Flight.fromJson(e, d[0], d[1]));
+        }
+        Iterator<String> it = cache.keys();
+        List<String> drop = new ArrayList<>();
+        while (it.hasNext()) {
+            String k = it.next();
+            if (!keep.has(k)) drop.add(k);
+        }
+        for (String k : drop) cache.remove(k);
+        r.totalCombos = combos.size();
+        Collections.sort(r.flights, Prices.BY_PRICE);
+
         Prices.Flight best = r.best();
         if (trip.hotel && best != null) {
             try {
@@ -57,9 +89,7 @@ final class Engine {
                 r.errors.add("호텔: " + message(e));
             }
         }
-        if (r.flights.isEmpty() && r.errors.isEmpty() && trip.dateOptions(today).isEmpty()) {
-            r.errors.add("출발 기간이 지났어요");
-        }
+        if (combos.isEmpty()) r.errors.add("출발 기간이 지났어요");
         return r;
     }
 
@@ -69,13 +99,33 @@ final class Engine {
     }
 
     /** 결과 JSON. history 는 {날짜: {여행키: {flight, hotel, total}}} 이며 오늘 값이 추가된다. */
-    static JSONObject run(Prices.Client client, List<Trip> trips, int today, JSONObject history) throws JSONException {
+    static JSONObject run(Prices.Client client, List<Trip> trips, int today, JSONObject history, JSONObject combos)
+            throws JSONException {
         List<TripResult> results = new ArrayList<>();
-        for (Trip t : trips) results.add(search(client, t, today));
-        Collections.sort(results, (a, b) -> {
-            Integer x = a.total(), y = b.total();
-            if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1;
-            return Integer.compare(x, y);
+        JSONObject keepCombos = new JSONObject();
+        for (Trip t : trips) {
+            JSONObject cache = combos.optJSONObject(t.key());
+            if (cache == null) cache = new JSONObject();
+            results.add(search(client, t, today, cache));
+            keepCombos.put(t.key(), cache);
+        }
+        // 지운/바꾼 여행의 기록은 정리
+        List<String> old = new ArrayList<>();
+        Iterator<String> ki = combos.keys();
+        while (ki.hasNext()) old.add(ki.next());
+        for (String k : old) combos.remove(k);
+        Iterator<String> ni = keepCombos.keys();
+        while (ni.hasNext()) {
+            String k = ni.next();
+            combos.put(k, keepCombos.get(k));
+        }
+        Collections.sort(results, new java.util.Comparator<TripResult>() {
+            @Override
+            public int compare(TripResult a, TripResult b) {
+                Integer x = a.total(), y = b.total();
+                if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1;
+                return Integer.compare(x, y);
+            }
         });
 
         JSONObject prev = previous(history, today);
@@ -83,7 +133,7 @@ final class Engine {
         JSONArray arr = new JSONArray();
         for (TripResult r : results) {
             JSONObject p = prev.optJSONObject(r.trip.key());
-            JSONObject o = toJson(r, p);
+            JSONObject o = toJson(r, p, today);
             arr.put(o);
             JSONObject s = new JSONObject();
             s.put("flight", o.optJSONObject("flight") == null ? JSONObject.NULL : o.getJSONObject("flight").getInt("price"));
@@ -125,7 +175,7 @@ final class Engine {
         return now - prev.optInt(key);
     }
 
-    private static JSONObject toJson(TripResult r, JSONObject prev) throws JSONException {
+    private static JSONObject toJson(TripResult r, JSONObject prev, int today) throws JSONException {
         Trip t = r.trip;
         JSONObject o = new JSONObject();
         o.put("name", t.name);
@@ -133,6 +183,9 @@ final class Engine {
         o.put("travelers", t.travelersLabel());
         o.put("cabin", t.cabin);
         o.put("hotelWanted", t.hotel);
+        o.put("combosChecked", r.checkedCombos);
+        o.put("combosTotal", r.totalCombos);
+        o.put("searchedToday", r.searched);
         Prices.Flight f = r.best();
         if (f != null) {
             JSONObject fj = new JSONObject();
@@ -147,13 +200,14 @@ final class Engine {
             fj.put("outbound", Day.label(f.outbound));
             fj.put("inbound", Day.label(f.inbound));
             fj.put("nights", f.inbound - f.outbound);
+            fj.put("checkedAgo", today - f.checked);
             o.put("flight", fj);
             o.put("flightsUrl", googleFlightsUrl(t, f));
             JSONArray others = new JSONArray();
-            for (int i = 1; i < Math.min(4, r.flights.size()); i++) {
+            for (int i = 1; i < Math.min(6, r.flights.size()); i++) {
                 Prices.Flight x = r.flights.get(i);
                 others.put(new JSONObject().put("label", Day.label(x.outbound) + " " + (x.inbound - x.outbound) + "박")
-                        .put("price", x.price));
+                        .put("price", x.price).put("checkedAgo", today - x.checked));
             }
             o.put("others", others);
         }

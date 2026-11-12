@@ -66,17 +66,65 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             trip(depart_to="2027-01-01")
 
-    def test_date_options_limited_and_spread(self):
-        t = trip(max_searches=3)
-        opts = t.date_options(TODAY)
-        self.assertEqual(len(opts), 3)  # 6일 x 2가지 = 12 조합 중 3개
-        self.assertEqual(opts[0], (date(2027, 1, 15), date(2027, 1, 18)))
-        self.assertEqual(opts[-1], (date(2027, 1, 20), date(2027, 1, 24)))
+    def test_all_combos_cover_range_and_nights(self):
+        t = trip()
+        combos = t.all_combos(TODAY)
+        self.assertEqual(len(combos), 12)  # 6일 x (3박, 4박)
+        self.assertEqual(combos[0], (date(2027, 1, 15), date(2027, 1, 18)))
+        self.assertEqual(combos[-1], (date(2027, 1, 20), date(2027, 1, 24)))
+        self.assertEqual(t.all_combos(date(2027, 1, 19))[0][0], date(2027, 1, 20))
+        self.assertEqual(t.all_combos(date(2027, 2, 1)), [])
 
-    def test_date_options_skip_past(self):
-        t = trip(max_searches=10)
-        self.assertEqual(t.date_options(date(2027, 1, 19))[0][0], date(2027, 1, 20))
-        self.assertEqual(t.date_options(date(2027, 2, 1)), [])
+    def test_spread_order(self):
+        self.assertEqual(cfg.spread_order(5), [0, 4, 2, 1, 3])
+        for n in range(1, 40):
+            self.assertEqual(sorted(cfg.spread_order(n)), list(range(n)))
+
+    def test_zero_means_all_every_day(self):
+        self.assertEqual(len(trip(max_searches=0).pick_today(TODAY, {})), 12)
+        self.assertEqual(len(trip().pick_today(TODAY, {})), 12)
+
+
+class GridClient:
+    """1/18 출발 4박이 제일 싼 가짜 항공 검색."""
+
+    def __init__(self):
+        self.keys = []
+
+    def flights(self, trip, outbound, inbound):
+        self.keys.append(cfg.combo_key((outbound, inbound)))
+        n = (inbound - outbound).days
+        price = 500_000 if (outbound.day, n) == (18, 4) else 700_000 + outbound.day * 1000 + n
+        return {"best_flights": [{"price": price, "flights": [{"airline": "KE", "flight_number": "KE1"}]}]}
+
+    def hotels(self, trip, a, b):
+        return {"properties": []}
+
+
+class RotationTest(unittest.TestCase):
+    def test_rotation_finds_cheapest_combo(self):
+        t = trip(max_searches=2, hotel=False)
+        c, cache, seen = GridClient(), {}, set()
+        for d in range(6):
+            r = search_trip(c, t, date(2026, 11, 12 + d), cache)
+            self.assertEqual(r.searched, 2)
+        seen.update(c.keys)
+        self.assertEqual(len(seen), 12)  # 6일 동안 12개 조합 전부 확인
+        self.assertEqual((r.checked_combos, r.total_combos), (12, 12))
+        self.assertEqual((r.best_flight.outbound, (r.best_flight.inbound - r.best_flight.outbound).days),
+                         (date(2027, 1, 18), 4))
+        self.assertEqual(r.best_flight.checked, date(2026, 11, 12 + c.keys.index("2027-01-18+4") // 2))
+        c.keys.clear()
+        search_trip(c, t, date(2026, 11, 18), cache)
+        self.assertIn("2027-01-18+4", c.keys)  # 다 본 뒤에는 최저가 조합을 다시 확인
+
+    def test_past_combos_dropped(self):
+        t = trip(max_searches=0, hotel=False)
+        cache = {}
+        search_trip(GridClient(), t, TODAY, cache)
+        self.assertEqual(len(cache), 12)
+        search_trip(GridClient(), t, date(2027, 1, 19), cache)
+        self.assertEqual(len(cache), 2)
 
 
 class ParseTest(unittest.TestCase):

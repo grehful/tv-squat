@@ -15,7 +15,7 @@ from pathlib import Path
 from . import config as cfg
 from .notify import send_all
 from .prices import SerpApiClient, search_trip
-from .report import build_message, load_history, previous, save_history
+from .report import build_message, load_history, previous, save_history, trip_key_of
 
 KST = timezone(timedelta(hours=9))
 
@@ -41,15 +41,22 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         client = SerpApiClient(key, conf.currency)
 
-    results = [search_trip(client, t, today) for t in conf.trips]
-
     history_path = Path(args.history)
     history = load_history(history_path)
+    old = history.get("_combos", {}) if not args.demo else {}
+    combos = {}
+    results = []
+    for t in conf.trips:
+        key = trip_key_of(t)
+        if args.demo:
+            t.max_searches = 0  # 체험 모드는 공짜라 매번 모든 조합
+        combos[key] = old.get(key, {})
+        results.append(search_trip(client, t, today, combos[key]))
     text = build_message(results, today, conf.currency, previous(history, today))
     print(text)
     print(f"\n(API 호출 {client.calls}회)", file=sys.stderr)
     if not args.demo:
-        save_history(history_path, history, today, results)
+        save_history(history_path, history, today, results, combos=combos)
 
     if args.dry_run:
         return 0

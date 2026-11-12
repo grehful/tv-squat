@@ -83,10 +83,14 @@
       </div>
       <label>아이 나이 (쉼표로, 없으면 비움) <input name="children_ages" inputmode="numeric" placeholder="7,10"></label>
 
-      <h3>호텔 · 검색</h3>
-      <label class="check"><input type="checkbox" name="hotel"> 힐튼 계열 호텔 가격도 찾기</label>
-      <label>하루 검색할 날짜 조합 수 <input type="number" name="max_searches" min="1" max="10" value="2"></label>
+      <h3>날짜 조합 검색</h3>
+      <p class="muted small">출발 가능 기간 안의 <b>모든 출발일 × 박수</b> 조합 중 최저가를 찾아요.</p>
+      <label class="check"><input type="checkbox" name="search_all"> 매일 모든 조합 확인 (가장 정확, 검색 횟수 많음)</label>
+      <label id="budget-row">하루 항공 검색 횟수 <input type="number" name="max_searches" min="1" max="60" value="4"></label>
       <p class="muted small" id="combo-hint"></p>
+
+      <h3>호텔</h3>
+      <label class="check"><input type="checkbox" name="hotel"> 힐튼 계열 호텔 가격도 찾기 (최저가 날짜로 하루 1회)</label>
       <label class="check"><input type="checkbox" name="enabled"> 매일 알림에 포함</label>
 
       <div id="form-error" class="error hidden"></div>

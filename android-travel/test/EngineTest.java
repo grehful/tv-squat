@@ -9,6 +9,30 @@ import java.util.List;
 
 /** 안드로이드 없이 PC 자바로 돌리는 엔진 테스트: android-travel/test.sh */
 public class EngineTest {
+    /** 출발일·박수마다 가격이 다르고, 한 조합이 제일 싼 가짜 항공 검색. */
+    static final class GridClient implements Prices.Client {
+        final int cheapDay, cheapNights;
+        final java.util.List<String> keys = new java.util.ArrayList<>();
+        int calls;
+
+        GridClient(int cheapDay, int cheapNights) {
+            this.cheapDay = cheapDay;
+            this.cheapNights = cheapNights;
+        }
+
+        public int calls() { return calls; }
+
+        public JSONObject flights(Trip t, int out, int in) throws Exception {
+            calls++;
+            keys.add(Trip.comboKey(new int[]{out, in}));
+            int price = (out == cheapDay && in - out == cheapNights) ? 500000 : 700000 + (out % 7) * 10000 + (in - out) * 1000;
+            return new JSONObject().put("best_flights", new JSONArray().put(new JSONObject().put("price", price)
+                    .put("flights", new JSONArray().put(new JSONObject().put("airline", "KE").put("flight_number", "KE 1")))));
+        }
+
+        public JSONObject hotels(Trip t, int a, int b) { return new JSONObject(); }
+    }
+
     static int failures;
 
     static void check(boolean ok, String what) {
@@ -41,11 +65,45 @@ public class EngineTest {
         eq(tokyo.maxStops, 0, "defaults merged");
         eq(trips.get(2).childAges.length, 1, "trip travelers");
         int today = Day.parse("2026-11-12");
-        List<int[]> opts = tokyo.dateOptions(today);
-        eq(opts.size(), 2, "max searches");
-        eq(Day.iso(opts.get(0)[0]) + "/" + Day.iso(opts.get(0)[1]), "2027-01-15/2027-01-18", "first combo");
-        eq(Day.iso(opts.get(1)[0]) + "/" + Day.iso(opts.get(1)[1]), "2027-01-25/2027-01-29", "last combo");
-        eq(tokyo.dateOptions(Day.parse("2027-02-01")).size(), 0, "past");
+        // 날짜 조합: 기간 안 모든 출발일 x 박수
+        List<int[]> all = tokyo.allCombos(today);
+        eq(all.size(), 22, "all combos (11 days x 2)");
+        eq(Day.iso(all.get(0)[0]) + "/" + Day.iso(all.get(0)[1]), "2027-01-15/2027-01-18", "first combo");
+        eq(Day.iso(all.get(21)[0]) + "/" + Day.iso(all.get(21)[1]), "2027-01-25/2027-01-29", "last combo");
+        eq(tokyo.allCombos(Day.parse("2027-01-24")).size(), 2, "past days dropped");
+        eq(tokyo.allCombos(Day.parse("2027-02-01")).size(), 0, "past");
+        eq(Trip.spreadOrder(5).toString(), "[0, 4, 2, 1, 3]", "spread");
+        for (int n = 1; n < 40; n++) eq(new java.util.HashSet<>(Trip.spreadOrder(n)).size(), n, "spread covers " + n);
+
+        // 하루 2회씩 돌아가며 확인 → 11일이면 모든 조합 확인, 진짜 최저가 조합을 찾는다
+        tokyo = Trip.parseAll(root).get(0);
+        tokyo.maxSearches = 2;
+        tokyo.hotel = false;
+        GridClient grid = new GridClient(Day.parse("2027-01-21"), 3); // 1/21 출발 3박이 제일 쌈
+        JSONObject cache = new JSONObject();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        Engine.TripResult tr = null;
+        for (int d = 0; d < 11; d++) {
+            tr = Engine.search(grid, tokyo, today + d, cache);
+            eq(tr.searched, 2, "2 searches per day");
+            seen.addAll(grid.keys);
+            grid.keys.clear();
+        }
+        eq(seen.size(), 22, "all combos covered in 11 days");
+        eq(tr.checkedCombos + "/" + tr.totalCombos, "22/22", "coverage");
+        eq(Day.iso(tr.best().outbound) + "+" + (tr.best().inbound - tr.best().outbound), "2027-01-21+3", "cheapest combo found");
+        // 그다음 날은 최저가 조합을 다시 확인한다
+        tr = Engine.search(grid, tokyo, today + 11, cache);
+        check(grid.keys.contains("2027-01-21+3"), "refresh best " + grid.keys);
+        // 0 = 매일 전부
+        tokyo.maxSearches = 0;
+        grid.keys.clear();
+        tr = Engine.search(grid, tokyo, today, new JSONObject());
+        eq(grid.keys.size(), 22, "all every day");
+        eq(Day.iso(tr.best().outbound), "2027-01-21", "best when all");
+        // 기간이 줄면 지난 조합은 지워진다
+        Engine.search(grid, tokyo, Day.parse("2027-01-24"), cache);
+        eq(cache.length(), 2, "cache pruned");
 
         // 잘못된 설정
         String[] bad = {
@@ -90,8 +148,11 @@ public class EngineTest {
 
         // 전체 실행 + 어제와 비교
         JSONObject history = new JSONObject();
-        JSONObject r1 = Engine.run(new DemoClient(today - 1), trips, today - 1, history);
-        JSONObject r2 = Engine.run(new DemoClient(today), trips, today, history);
+        for (Trip t : trips) t.maxSearches = 2;
+        JSONObject combos = new JSONObject();
+        JSONObject r1 = Engine.run(new DemoClient(today - 1), trips, today - 1, history, combos);
+        JSONObject r2 = Engine.run(new DemoClient(today), trips, today, history, combos);
+        eq(combos.length(), 3, "combo cache per trip");
         JSONArray t2 = r2.getJSONArray("trips");
         eq(t2.length(), 3, "results");
         eq(r2.getInt("calls"), 9, "calls");
@@ -100,6 +161,7 @@ public class EngineTest {
             JSONObject t = t2.getJSONObject(i);
             check(t.has("flight") && t.getJSONArray("hotels").length() == 3, "trip has flight+hotels " + t);
             check(t.getJSONObject("flight").opt("delta") instanceof Number, "delta vs yesterday");
+            check(t.getInt("combosChecked") == 4 && t.getInt("combosTotal") > 4, "coverage after 2 days " + t.getInt("combosChecked"));
             check(t.getString("flightsUrl").startsWith("https://www.google.com/travel/flights"), "url");
             if (i > 0) check(t2.getJSONObject(i - 1).getInt("total") <= t.getInt("total"), "sorted by total");
         }

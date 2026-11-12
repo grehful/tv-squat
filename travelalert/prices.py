@@ -8,7 +8,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date
 
-from .config import CABINS, STOPS, Trip
+from .config import CABINS, STOPS, Trip, combo_key
 
 API_URL = "https://serpapi.com/search.json"
 
@@ -42,6 +42,7 @@ class Flight:
     inbound: date
     price_level: str | None = None  # low / typical / high (구글 판단)
     typical_range: list[int] = field(default_factory=list)
+    checked: date | None = None  # 이 가격을 확인한 날
 
 
 @dataclass
@@ -178,6 +179,9 @@ class TripResult:
     flights: list[Flight] = field(default_factory=list)  # 날짜 조합별 최저가, 싼 순
     hotels: list[Hotel] = field(default_factory=list)  # 최저가 항공 날짜 기준
     errors: list[str] = field(default_factory=list)
+    searched: int = 0
+    checked_combos: int = 0
+    total_combos: int = 0
 
     @property
     def best_flight(self) -> Flight | None:
@@ -194,17 +198,45 @@ class TripResult:
         return self.best_flight.price + (self.best_hotel.total if self.best_hotel else 0)
 
 
-def search_trip(client, trip: Trip, today: date) -> TripResult:
+def flight_to_cache(f: Flight, today: date) -> dict:
+    return {"price": f.price, "airlines": f.airlines, "numbers": f.flight_numbers, "stops": f.stops,
+            "duration": f.duration_min, "depart": f.depart_time, "arrive": f.arrive_time,
+            "level": f.price_level, "range": f.typical_range, "checked": today.isoformat()}
+
+
+def flight_from_cache(e: dict, outbound: date, inbound: date) -> Flight:
+    return Flight(price=e["price"], airlines=e.get("airlines", []), flight_numbers=e.get("numbers", []),
+                  stops=e.get("stops", 0), duration_min=e.get("duration", 0), depart_time=e.get("depart", ""),
+                  arrive_time=e.get("arrive", ""), outbound=outbound, inbound=inbound,
+                  price_level=e.get("level"), typical_range=e.get("range", []),
+                  checked=date.fromisoformat(e["checked"]) if e.get("checked") else None)
+
+
+def search_trip(client, trip: Trip, today: date, cache: dict | None = None) -> TripResult:
+    """기간 안 모든 (출발일, 박수) 조합 중 최저가를 찾는다.
+
+    cache 는 이 여행의 조합별 최근 확인 결과이며 오늘 검색한 조합이 갱신된다(지난 조합은 지워짐).
+    """
+    cache = {} if cache is None else cache
     res = TripResult(trip)
-    for outbound, inbound in trip.date_options(today):
+    combos = trip.all_combos(today)
+    for outbound, inbound in trip.pick_today(today, cache):
+        key = combo_key((outbound, inbound))
         try:
             flights = parse_flights(client.flights(trip, outbound, inbound), outbound, inbound)
         except Exception as e:  # noqa: BLE001 - 한 날짜 실패해도 나머지는 계속
-            res.errors.append(f"항공 {outbound:%m/%d}: {e}")
+            res.errors.append(f"항공 {outbound:%m/%d} {(inbound - outbound).days}박: {e}")
             continue
-        if flights:
-            res.flights.append(flights[0])
-    res.flights.sort(key=lambda f: f.price)
+        res.searched += 1
+        cache[key] = flight_to_cache(flights[0], today) if flights else {"none": True, "checked": today.isoformat()}
+    valid = {combo_key(c): c for c in combos}
+    for k in list(cache):
+        if k not in valid:
+            del cache[k]
+    res.checked_combos = len(cache)
+    res.total_combos = len(combos)
+    res.flights = sorted((flight_from_cache(e, *valid[k]) for k, e in cache.items() if "price" in e),
+                         key=lambda f: f.price)
     best = res.best_flight
     if trip.hotel and best:
         nights = (best.inbound - best.outbound).days
@@ -212,4 +244,6 @@ def search_trip(client, trip: Trip, today: date) -> TripResult:
             res.hotels = parse_hotels(client.hotels(trip, best.outbound, best.inbound), nights, trip.rooms)
         except Exception as e:  # noqa: BLE001
             res.errors.append(f"호텔: {e}")
+    if not combos:
+        res.errors.append("출발 기간이 지났어요")
     return res

@@ -24,7 +24,7 @@ final class Trip {
     String[] airlines = new String[0];
     int maxStops = -1; // -1 = 상관없음, 0 = 직항
     String cabin = "economy";
-    int maxSearches = 3;
+    int maxSearches = 0; // 하루 항공 검색 횟수, 0 = 매일 모든 조합
     boolean hotel = true;
     int rooms = 1;
 
@@ -49,20 +49,94 @@ final class Trip {
         return name + "|" + origin + "-" + destination + "|" + Day.iso(departFrom) + "~" + Day.iso(departTo);
     }
 
-    /** 검색할 {출발일, 귀국일} 후보. maxSearches 개를 넘으면 기간 안에서 고르게 뽑는다. */
-    List<int[]> dateOptions(int today) {
+    /** 기간 안의 모든 {출발일, 귀국일} 조합 (오늘 이후 출발만). */
+    List<int[]> allCombos(int today) {
         List<int[]> combos = new ArrayList<>();
         for (int d = Math.max(departFrom, today + 1); d <= departTo; d++) {
             for (int n : nights) combos.add(new int[]{d, d + n});
         }
-        if (combos.size() <= maxSearches) return combos;
-        List<int[]> out = new ArrayList<>();
-        if (maxSearches == 1) {
-            out.add(combos.get(combos.size() / 2));
-            return out;
+        return combos;
+    }
+
+    static String comboKey(int[] c) {
+        return Day.iso(c[0]) + "+" + (c[1] - c[0]);
+    }
+
+    /**
+     * 오늘 검색할 조합. 하루 검색 횟수가 조합 수보다 적으면 돌아가며 검색한다:
+     * 지금까지 가장 싼 조합 2개를 다시 확인 → 아직 안 본 조합(기간 전체에 고르게) → 오래전에 본 조합 순.
+     * cache: {조합키: {price.., checked}} (확인 결과 기록)
+     */
+    List<int[]> pickToday(int today, org.json.JSONObject cache) {
+        final List<int[]> combos = allCombos(today);
+        if (maxSearches <= 0 || maxSearches >= combos.size()) return combos;
+        List<int[]> order = new ArrayList<>();
+        // 1) 지금까지 최저가 2개
+        List<int[]> known = new ArrayList<>();
+        for (int[] c : combos) {
+            org.json.JSONObject e = cache.optJSONObject(comboKey(c));
+            if (e != null && e.has("price")) known.add(c);
         }
-        double step = (combos.size() - 1) / (double) (maxSearches - 1);
-        for (int i = 0; i < maxSearches; i++) out.add(combos.get((int) Math.round(i * step)));
+        final org.json.JSONObject cc = cache;
+        java.util.Collections.sort(known, new java.util.Comparator<int[]>() {
+            @Override
+            public int compare(int[] a, int[] b) {
+                return Integer.compare(cc.optJSONObject(comboKey(a)).optInt("price"), cc.optJSONObject(comboKey(b)).optInt("price"));
+            }
+        });
+        // 아직 안 본 조합이 있으면 한 바퀴 도는 것을 우선하고, 다 본 뒤에는 최저가 조합을 매일 다시 확인
+        boolean unseen = false;
+        for (int[] c : combos) unseen |= cache.optJSONObject(comboKey(c)) == null;
+        int refresh = unseen ? (maxSearches >= 4 ? 1 : 0) : Math.min(2, Math.max(1, maxSearches / 2));
+        refresh = Math.min(refresh, known.size());
+        for (int i = 0; i < refresh; i++) order.add(known.get(i));
+        // 2) 나머지: 확인한 지 오래된 순 (안 본 조합이 먼저), 같으면 기간 전체에 고르게 퍼지는 순서
+        List<int[]> rest = new ArrayList<>();
+        for (int idx : spreadOrder(combos.size())) {
+            if (!order.contains(combos.get(idx))) rest.add(combos.get(idx));
+        }
+        final List<int[]> spread = new ArrayList<>(rest);
+        java.util.Collections.sort(rest, new java.util.Comparator<int[]>() {
+            @Override
+            public int compare(int[] a, int[] b) {
+                int ca = checked(cc, a), cb = checked(cc, b);
+                if (ca != cb) return Integer.compare(ca, cb);
+                return Integer.compare(spread.indexOf(a), spread.indexOf(b));
+            }
+        });
+        for (int[] c : rest) {
+            if (order.size() >= maxSearches) break;
+            order.add(c);
+        }
+        return order;
+    }
+
+    private static int checked(org.json.JSONObject cache, int[] c) {
+        org.json.JSONObject e = cache.optJSONObject(comboKey(c));
+        return e == null ? Integer.MIN_VALUE : e.optInt("checked", Integer.MIN_VALUE);
+    }
+
+    /** 0..n-1 을 기간 전체에 고르게 퍼지게 나열 (0, 끝, 가운데, 1/4, 3/4 ...). */
+    static List<Integer> spreadOrder(int n) {
+        List<Integer> out = new ArrayList<>();
+        if (n == 0) return out;
+        boolean[] used = new boolean[n];
+        out.add(0);
+        used[0] = true;
+        if (n > 1) {
+            out.add(n - 1);
+            used[n - 1] = true;
+        }
+        for (int parts = 2; out.size() < n && parts < 4 * n; parts *= 2) {
+            for (int k = 1; k < parts; k += 2) {
+                int idx = (int) Math.round(k * (n - 1) / (double) parts);
+                if (!used[idx]) {
+                    used[idx] = true;
+                    out.add(idx);
+                }
+            }
+        }
+        for (int i = 0; i < n; i++) if (!used[i]) out.add(i);
         return out;
     }
 
@@ -150,7 +224,7 @@ final class Trip {
         boolean ok = false;
         for (String c : CABINS) ok |= c.equals(trip.cabin);
         if (!ok) throw new JSONException(err + "좌석 등급이 잘못됐습니다: " + trip.cabin);
-        trip.maxSearches = Math.max(1, t.optInt("max_searches", 3));
+        trip.maxSearches = Math.max(0, t.optInt("max_searches", 0));
         trip.hotel = t.optBoolean("hotel", true);
         trip.rooms = Math.max(1, t.optInt("rooms", 1));
         return trip;

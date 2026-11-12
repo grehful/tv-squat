@@ -58,8 +58,11 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        webView.evaluateJavascript("window.onBack && onBack()", v -> {
-            if (!"true".equals(v)) finish();
+        webView.evaluateJavascript("window.onBack && onBack()", new android.webkit.ValueCallback<String>() {
+            @Override
+            public void onReceiveValue(String v) {
+                if (!"true".equals(v)) finish();
+            }
         });
     }
 
@@ -70,8 +73,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void js(String code) {
-        runOnUiThread(() -> webView.evaluateJavascript(code, null));
+    private void js(final String code) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                webView.evaluateJavascript(code, null);
+            }
+        });
     }
 
     private final class Bridge {
@@ -124,21 +132,25 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void runNow(boolean withNotification) {
-            if (Runner.isRunning()) return;
-            new Thread(() -> {
-                String err = null;
-                try {
-                    JSONObject r = Runner.search(MainActivity.this);
-                    if (withNotification) {
-                        String[] s = Engine.summary(r);
-                        Runner.notify(MainActivity.this, s[0], s[1]);
+        public boolean runNow(final boolean withNotification) {
+            if (Runner.isRunning()) return false;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    String err = null;
+                    try {
+                        JSONObject r = Runner.search(MainActivity.this);
+                        if (withNotification) {
+                            String[] s = Engine.summary(r);
+                            Runner.notify(MainActivity.this, s[0], s[1]);
+                        }
+                    } catch (Throwable e) {
+                        err = e.getMessage() == null ? e.toString() : e.getMessage();
                     }
-                } catch (Exception e) {
-                    err = String.valueOf(e.getMessage());
+                    js("onSearchDone(" + JSONObject.quote(err == null ? "" : err) + ")");
                 }
-                js("onSearchDone(" + JSONObject.quote(err == null ? "" : err) + ")");
             }, "travel-search").start();
+            return true;
         }
 
         @JavascriptInterface

@@ -44,25 +44,67 @@ class Trip:
     airlines: list[str] = field(default_factory=list)  # IATA 코드, 비우면 전체
     max_stops: int | None = None
     cabin: str = "economy"
-    max_searches: int = 3
+    max_searches: int = 0  # 하루 항공 검색 횟수, 0 = 매일 모든 조합
     hotel: bool = True
     rooms: int = 1
 
-    def date_options(self, today: date) -> list[tuple[date, date]]:
-        """검색할 (출발일, 귀국일) 후보. max_searches 개를 넘으면 고르게 뽑는다."""
-        start = max(self.depart_from, today + timedelta(days=1))
+    def all_combos(self, today: date) -> list[tuple[date, date]]:
+        """기간 안의 모든 (출발일, 귀국일) 조합 (오늘 이후 출발만)."""
         combos = []
-        d = start
+        d = max(self.depart_from, today + timedelta(days=1))
         while d <= self.depart_to:
             for n in self.nights:
                 combos.append((d, d + timedelta(days=n)))
             d += timedelta(days=1)
-        if len(combos) <= self.max_searches:
+        return combos
+
+    def pick_today(self, today: date, cache: dict) -> list[tuple[date, date]]:
+        """오늘 검색할 조합. 하루 횟수가 조합 수보다 적으면 돌아가며 검색 (안드로이드 앱과 같은 규칙).
+
+        아직 안 본 조합이 있으면 한 바퀴 도는 것을 우선(4회 이상이면 최저가 1개는 다시 확인),
+        다 본 뒤에는 최저가 조합을 다시 확인하고 나머지는 오래전에 본 순서로.
+        """
+        combos = self.all_combos(today)
+        if self.max_searches <= 0 or self.max_searches >= len(combos):
             return combos
-        if self.max_searches == 1:
-            return [combos[len(combos) // 2]]
-        step = (len(combos) - 1) / (self.max_searches - 1)
-        return [combos[round(i * step)] for i in range(self.max_searches)]
+        known = sorted((c for c in combos if "price" in cache.get(combo_key(c), {})),
+                       key=lambda c: cache[combo_key(c)]["price"])
+        unseen = any(combo_key(c) not in cache for c in combos)
+        refresh = (1 if self.max_searches >= 4 else 0) if unseen else min(2, max(1, self.max_searches // 2))
+        order = known[:refresh]
+        spread = [combos[i] for i in spread_order(len(combos)) if combos[i] not in order]
+        pos = {c: i for i, c in enumerate(spread)}
+
+        def age(c):  # 안 본 조합 → 오래전에 본 조합 순, 같으면 고르게 퍼지는 순
+            checked = cache.get(combo_key(c), {}).get("checked")
+            return (checked is not None, checked or "", pos[c])
+
+        spread.sort(key=age)
+        return (order + spread)[: self.max_searches]
+
+
+def combo_key(c: tuple[date, date]) -> str:
+    return f"{c[0].isoformat()}+{(c[1] - c[0]).days}"
+
+
+def spread_order(n: int) -> list[int]:
+    """0..n-1 을 기간 전체에 고르게 퍼지게 나열 (0, 끝, 가운데, 1/4, 3/4 ...)."""
+    if n == 0:
+        return []
+    out, used = [0], {0}
+    if n > 1:
+        out.append(n - 1)
+        used.add(n - 1)
+    parts = 2
+    while len(out) < n and parts < 4 * n:
+        for k in range(1, parts, 2):
+            idx = int(k * (n - 1) / parts + 0.5)
+            if idx not in used:
+                used.add(idx)
+                out.append(idx)
+        parts *= 2
+    out += [i for i in range(n) if i not in used]
+    return out
 
 
 @dataclass
@@ -117,7 +159,7 @@ def parse(raw: dict) -> Config:
             airlines=[a.strip().upper() for a in t.get("airlines", []) if a.strip()],
             max_stops=max_stops,
             cabin=cabin,
-            max_searches=max(1, int(t.get("max_searches", 3))),
+            max_searches=max(0, int(t.get("max_searches", 0))),
             hotel=bool(t.get("hotel", True)),
             rooms=max(1, int(t.get("rooms", 1))),
         )

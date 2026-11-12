@@ -44,6 +44,7 @@ final class Runner {
 
     /** 검색하고 결과를 저장한다. 키가 없으면 체험 모드(가짜 가격, 기록 안 함). */
     static synchronized JSONObject search(Context c) throws Exception {
+        // 다른 곳(아침 작업/버튼)에서 이미 검색 중이면 기다렸다가 이어서 실행된다
         running = true;
         try {
             SharedPreferences p = prefs(c);
@@ -54,15 +55,18 @@ final class Runner {
             Prices.Client client = demo ? new DemoClient(today)
                     : new Prices.SerpApi(key, root.optString("currency", "KRW"));
             JSONObject history = demo ? new JSONObject() : new JSONObject(p.getString("history", "{}"));
-            JSONObject result = Engine.run(client, Trip.parseAll(root), today, history);
+            JSONObject combos = demo ? new JSONObject() : new JSONObject(p.getString("combos", "{}"));
+            java.util.List<Trip> trips = Trip.parseAll(root);
+            if (demo) for (Trip t : trips) t.maxSearches = 0; // 체험 모드는 공짜라 매번 모든 조합
+            JSONObject result = Engine.run(client, trips, today, history, combos);
             result.put("demo", demo);
             result.put("at", System.currentTimeMillis());
             SharedPreferences.Editor e = p.edit().putString("last", result.toString()).remove("lastError");
-            if (!demo) e.putString("history", history.toString());
+            if (!demo) e.putString("history", history.toString()).putString("combos", combos.toString());
             e.apply();
             return result;
-        } catch (Exception ex) {
-            prefs(c).edit().putString("lastError", String.valueOf(ex.getMessage())).apply();
+        } catch (Exception | Error ex) {
+            prefs(c).edit().putString("lastError", ex.getMessage() == null ? ex.toString() : ex.getMessage()).apply();
             throw ex;
         } finally {
             running = false;

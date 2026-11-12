@@ -69,6 +69,7 @@ function money(n) {
   if (Math.abs(n) >= 10000) return `${(n / 10000).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}만원`;
   return `${n.toLocaleString('ko-KR')}원`;
 }
+const ago = (n) => (n == null || n <= 0) ? '오늘 확인' : n === 1 ? '어제 확인' : `${n}일 전 확인`;
 const delta = (d) => (typeof d === 'number' && d !== 0)
   ? `<span class="${d < 0 ? 'down' : 'up'}">${d < 0 ? '▼' : '▲'} ${money(Math.abs(d))}</span>` : '';
 
@@ -141,13 +142,20 @@ function tripCard(t, i) {
   if (f) h += ` · ${esc(f.outbound)} → ${esc(f.inbound)} ${f.nights}박`;
   h += t.total != null && t.totalDelta ? ` · 어제보다 ${delta(t.totalDelta)}` : '';
   h += '</div>';
+  if (t.combosTotal) {
+    const full = t.combosChecked >= t.combosTotal;
+    h += `<div class="info small muted">날짜 조합 ${t.combosTotal}개 중 ${t.combosChecked}개 확인${full ? '' : ' (나머지는 다음 검색 때 이어서 확인)'} · 오늘 ${t.searchedToday}회 검색</div>`;
+  }
   if (!f) {
     h += '<div class="part"><div class="info">항공권 결과가 없어요</div></div>';
   } else {
     h += `<div class="part"><div class="head"><span>🛫 항공 (왕복 · 전원)</span><span class="price">${money(f.price)} ${delta(f.delta)}</span></div>
-      <div class="info">${esc(f.airlines)} · ${f.stops === 0 ? '직항' : `경유 ${f.stops}회`}${f.numbers ? ' · ' + esc(f.numbers) : ''}${f.depart ? ' · 출발 ' + esc(f.depart) : ''}</div>`;
+      <div class="info">${esc(f.airlines)} · ${f.stops === 0 ? '직항' : `경유 ${f.stops}회`}${f.numbers ? ' · ' + esc(f.numbers) : ''}${f.depart ? ' · 출발 ' + esc(f.depart) : ''} · ${ago(f.checkedAgo)}</div>`;
     if (LEVELS[f.level]) h += `<span class="level">${LEVELS[f.level]}</span>`;
-    if (t.others && t.others.length) h += `<div class="info">다른 날짜: ${t.others.map((o) => `${esc(o.label)} ${money(o.price)}`).join(', ')}</div>`;
+    if (t.others && t.others.length) {
+      h += `<div class="info">다음으로 싼 날짜</div><div class="info">${t.others.map((o) =>
+        `· ${esc(o.label)} ${money(o.price)}${o.checkedAgo > 0 ? ` <span class="small">(${ago(o.checkedAgo)})</span>` : ''}`).join('<br>')}</div>`;
+    }
     h += '</div>';
   }
   if (t.hotelWanted && f) {
@@ -186,12 +194,14 @@ function renderTrips() {
         <div class="grow"><b>${esc(t.name)}</b> <span class="muted small">${esc(t.origin || config.origin)}→${esc(t.destination)}</span>
           <div class="muted small">${esc(fmtRange(t.depart_from, t.depart_to))} 출발 · ${esc(t.nights.join('/'))}박 · ${people}</div>
           <div class="muted small">${t.airlines && t.airlines.length ? esc(t.airlines.join(', ')) : '전체 항공사'} · ${stopName(t.max_stops)}${t.hotel ? ' · 🏨 힐튼' : ''}</div>
+          <div class="muted small">날짜 조합 ${combos(t)}개 · ${t.max_searches > 0 && t.max_searches < combos(t) ? `하루 ${t.max_searches}개씩 돌아가며` : '매일 전부'} 확인</div>
         </div>
         <label class="switch" data-toggle="${i}"><input type="checkbox" ${t.enabled ? 'checked' : ''}><span></span></label>
       </div>`;
     }).join('');
   }
-  const calls = config.trips.filter((t) => t.enabled).reduce((s, t) => s + Math.min(t.max_searches || 3, combos(t)) + (t.hotel ? 1 : 0), 0);
+  const calls = config.trips.filter((t) => t.enabled)
+    .reduce((s, t) => s + (t.max_searches > 0 ? Math.min(t.max_searches, combos(t)) : combos(t)) + (t.hotel ? 1 : 0), 0);
   $('#quota').textContent = `하루 검색 약 ${calls}회 · 한 달 약 ${calls * 30}회 (SerpApi 요금제 한도 안에서 쓰세요)`;
 }
 
@@ -229,7 +239,7 @@ function openEditor(i) {
   const t = i >= 0 ? config.trips[i] : {
     name: '', destination: '', hotel_city: '', origin: config.origin,
     depart_from: iso(new Date(now.getTime() + 30 * 864e5)), depart_to: iso(new Date(now.getTime() + 40 * 864e5)),
-    nights: [3, 4], airlines: [], cabin: 'economy', max_stops: 0, max_searches: 2, hotel: true, rooms: 1, enabled: true,
+    nights: [3, 4], airlines: [], cabin: 'economy', max_stops: 0, max_searches: 4, hotel: true, rooms: 1, enabled: true,
     travelers: { ...{ adults: 2, children_ages: [], infants: 0 }, ...config.travelers },
   };
   const f = $('#trip-form');
@@ -248,7 +258,8 @@ function openEditor(i) {
   f.children_ages.value = (t.travelers.children_ages || []).join(',');
   f.rooms.value = t.rooms || 1;
   f.hotel.checked = t.hotel !== false;
-  f.max_searches.value = t.max_searches || 2;
+  f.search_all.checked = !(t.max_searches > 0);
+  f.max_searches.value = t.max_searches > 0 ? t.max_searches : 4;
   f.enabled.checked = t.enabled !== false;
   $('#delete-trip').classList.toggle('hidden', i < 0);
   $('#form-error').classList.add('hidden');
@@ -270,10 +281,20 @@ function renderChips() {
     `<button type="button" class="${al.includes(c) ? 'on' : ''}" data-air="${c}">${n}</button>`).join('');
   const t = { depart_from: f.depart_from.value, depart_to: f.depart_to.value || f.depart_from.value, nights: nums(f.nights.value) };
   const c = t.depart_from ? combos(t) : 0;
-  const m = +f.max_searches.value || 1;
-  $('#combo-hint').textContent = c
-    ? `가능한 날짜 조합 ${c}개 중 매일 ${Math.min(c, m)}개를 고르게 골라 검색해요 (호텔은 가장 싼 날짜로 1번 더).`
-    : '';
+  const all = f.search_all.checked;
+  $('#budget-row').classList.toggle('hidden', all);
+  const m = all ? c : Math.min(c, +f.max_searches.value || 1);
+  const days = m ? Math.ceil(c / m) : 0;
+  const hotel = f.hotel.checked ? 1 : 0;
+  let hint = '';
+  if (c) {
+    hint = `가능한 조합 ${c}개 (출발일 ${c / (t.nights.length || 1)}일 × ${t.nights.join('·')}박). `;
+    hint += all || m >= c
+      ? '매일 전부 확인해서 그날의 최저가 조합을 알려줘요. '
+      : `하루 ${m}개씩 돌아가며 확인해서 약 ${days}일마다 전체를 한 바퀴 보고, 그동안 확인한 가격 중 최저가 조합을 알려줘요 (최저가 조합은 다시 확인). `;
+    hint += `이 여행만 하루 ${m + hotel}회 · 한 달 약 ${(m + hotel) * 30}회 검색해요.`;
+  }
+  $('#combo-hint').textContent = hint;
 }
 
 $('#dest-chips').addEventListener('click', (e) => {
@@ -295,6 +316,7 @@ $('#airline-chips').addEventListener('click', (e) => {
   renderChips();
 });
 $('#trip-form').addEventListener('input', renderChips);
+$('#trip-form').addEventListener('change', renderChips);
 
 $('#trip-form').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -314,7 +336,7 @@ $('#trip-form').addEventListener('submit', (e) => {
     travelers: { adults: +f.adults.value || 1, children_ages: nums(f.children_ages.value), infants: +f.infants.value || 0 },
     rooms: +f.rooms.value || 1,
     hotel: f.hotel.checked,
-    max_searches: +f.max_searches.value || 2,
+    max_searches: f.search_all.checked ? 0 : (+f.max_searches.value || 1),
     enabled: f.enabled.checked,
   };
   const err = $('#form-error');
@@ -373,9 +395,7 @@ $('#settings-form').addEventListener('submit', (e) => {
 $('#clear-key').onclick = () => { saveSettings(''); toast('키를 지웠어요 (체험 모드)'); renderSettings(); };
 $('#battery').onclick = () => T.openBatterySettings();
 $('#test-notify').onclick = () => {
-  T.runNow(true);
-  toast('검색 중… 끝나면 알림이 와요');
-  state.running = true;
+  if (startSearch(true)) toast('검색 중… 끝나면 알림이 와요');
 };
 $('#reset').onclick = () => {
   if (!confirm('여행 목록을 처음 예시로 되돌릴까요? 지금 목록은 사라져요.')) return;
@@ -390,11 +410,18 @@ document.querySelector('nav').addEventListener('click', (e) => {
   if (b) show(b.dataset.page);
 });
 $('#back').onclick = () => window.onBack();
-$('#run').onclick = () => {
-  T.runNow(false);
+function startSearch(withNotification) {
+  try {
+    if (T.runNow(withNotification) === false) { toast('이미 검색 중이에요'); return false; }
+  } catch (e) {
+    toast('검색을 시작하지 못했어요: ' + e.message);
+    return false;
+  }
   state.running = true;
-  renderHome();
-};
+  if (page === 'home') renderHome();
+  return true;
+}
+$('#run').onclick = () => startSearch(false);
 $('#results').addEventListener('click', (e) => {
   const b = e.target.closest('[data-url]');
   if (b) T.openUrl(b.dataset.url);

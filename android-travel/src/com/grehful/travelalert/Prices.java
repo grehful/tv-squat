@@ -12,6 +12,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -53,7 +54,36 @@ final class Prices {
         String departTime = "";
         int outbound, inbound;
         String priceLevel;
+        int checked = -1; // 이 가격을 확인한 날 (Day)
+
+        JSONObject toJson() throws JSONException {
+            return new JSONObject().put("price", price).put("airlines", new JSONArray(airlines))
+                    .put("numbers", new JSONArray(numbers)).put("stops", stops).put("durationMin", durationMin)
+                    .put("departTime", departTime).put("level", priceLevel == null ? JSONObject.NULL : priceLevel)
+                    .put("checked", checked);
+        }
+
+        static Flight fromJson(JSONObject o, int outbound, int inbound) {
+            Flight f = new Flight();
+            f.price = o.optInt("price");
+            JSONArray a = o.optJSONArray("airlines"), n = o.optJSONArray("numbers");
+            for (int i = 0; a != null && i < a.length(); i++) f.airlines.add(a.optString(i));
+            for (int i = 0; n != null && i < n.length(); i++) f.numbers.add(n.optString(i));
+            f.stops = o.optInt("stops");
+            f.durationMin = o.optInt("durationMin");
+            f.departTime = o.optString("departTime", "");
+            f.priceLevel = o.isNull("level") ? null : o.optString("level", null);
+            f.checked = o.optInt("checked", -1);
+            f.outbound = outbound;
+            f.inbound = inbound;
+            return f;
+        }
     }
+
+    static final Comparator<Flight> BY_PRICE = new Comparator<Flight>() {
+        @Override
+        public int compare(Flight a, Flight b) { return Integer.compare(a.price, b.price); }
+    };
 
     static final class Hotel {
         String name, link, hotelClass;
@@ -92,7 +122,7 @@ final class Prices {
                 out.add(f);
             }
         }
-        Collections.sort(out, (a, b) -> Integer.compare(a.price, b.price));
+        Collections.sort(out, BY_PRICE);
         return out;
     }
 
@@ -124,7 +154,10 @@ final class Prices {
             h.link = p.optString("link", null);
             out.add(h);
         }
-        Collections.sort(out, (a, b) -> Integer.compare(a.total, b.total));
+        Collections.sort(out, new Comparator<Hotel>() {
+            @Override
+            public int compare(Hotel a, Hotel b) { return Integer.compare(a.total, b.total); }
+        });
         return out;
     }
 

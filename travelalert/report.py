@@ -25,6 +25,13 @@ def _d(d: date) -> str:
     return f"{d.month}/{d.day}({WEEKDAYS[d.weekday()]})"
 
 
+def _ago(checked: date | None, today: date) -> str:
+    if checked is None or checked >= today:
+        return ""
+    n = (today - checked).days
+    return " (어제 확인)" if n == 1 else f" ({n}일 전 확인)"
+
+
 def _delta(now: int | None, before: int | None, currency: str) -> str:
     if now is None or before is None or now == before:
         return ""
@@ -33,9 +40,12 @@ def _delta(now: int | None, before: int | None, currency: str) -> str:
     return f" {arrow}{won(abs(diff), currency)}"
 
 
-def trip_key(r: TripResult) -> str:
-    t = r.trip
+def trip_key_of(t) -> str:
     return f"{t.name}|{t.origin}-{t.destination}|{t.depart_from}~{t.depart_to}"
+
+
+def trip_key(r: TripResult) -> str:
+    return trip_key_of(r.trip)
 
 
 def snapshot(results: list[TripResult]) -> dict:
@@ -53,10 +63,15 @@ def load_history(path: Path) -> dict:
         return {}
 
 
-def save_history(path: Path, history: dict, today: date, results: list[TripResult], keep_days: int = 60) -> dict:
+def save_history(path: Path, history: dict, today: date, results: list[TripResult], keep_days: int = 60,
+                 combos: dict | None = None) -> dict:
+    """history: {날짜: 스냅샷, ..., "_combos": {여행키: 조합별 확인 결과}}"""
     history = dict(history)
     history[today.isoformat()] = snapshot(results)
-    for k in sorted(history)[:-keep_days]:
+    if combos is not None:
+        history["_combos"] = combos
+    days = sorted(k for k in history if not k.startswith("_"))
+    for k in days[:-keep_days]:
         del history[k]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(history, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -64,7 +79,7 @@ def save_history(path: Path, history: dict, today: date, results: list[TripResul
 
 
 def previous(history: dict, today: date) -> dict:
-    days = [d for d in sorted(history) if d < today.isoformat()]
+    days = [d for d in sorted(history) if not d.startswith("_") and d < today.isoformat()]
     return history[days[-1]] if days else {}
 
 
@@ -84,7 +99,9 @@ def build_message(results: list[TripResult], today: date, currency: str = "KRW",
         else:
             nights = (f.inbound - f.outbound).days
             stops = "직항" if f.stops == 0 else f"경유 {f.stops}회"
-            lines.append(f"  🗓 {_d(f.outbound)} → {_d(f.inbound)} ({nights}박)")
+            lines.append(f"  🗓 {_d(f.outbound)} → {_d(f.inbound)} ({nights}박){_ago(f.checked, today)}")
+            if r.total_combos:
+                lines.append(f"     날짜 조합 {r.total_combos}개 중 {r.checked_combos}개 확인 · 오늘 {r.searched}회 검색")
             lines.append(f"  🛫 {won(f.price, currency)}{_delta(f.price, p.get('flight'), currency)}"
                          f" · {', '.join(f.airlines)} {stops}")
             detail = " / ".join(x for x in f.flight_numbers if x)
@@ -94,10 +111,11 @@ def build_message(results: list[TripResult], today: date, currency: str = "KRW",
                 lines.append(f"     {detail.strip(' ·')}")
             if f.price_level in LEVELS:
                 lines.append(f"     {LEVELS[f.price_level]}")
-            others = r.flights[1:3]
+            others = r.flights[1:4]
             if others:
-                lines.append("     다른 날짜: " + ", ".join(
-                    f"{_d(o.outbound)} {(o.inbound - o.outbound).days}박 {won(o.price, currency)}" for o in others))
+                lines.append("     다음으로 싼 날짜: " + ", ".join(
+                    f"{_d(o.outbound)} {(o.inbound - o.outbound).days}박 {won(o.price, currency)}{_ago(o.checked, today)}"
+                    for o in others))
         if t.hotel and f:
             h = r.best_hotel
             if h:
