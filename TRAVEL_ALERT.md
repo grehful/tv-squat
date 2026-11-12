@@ -26,6 +26,28 @@
 - 힐튼 계열: Hilton, Conrad, Waldorf Astoria, DoubleTree, Hampton, Hilton Garden Inn, Canopy, Curio, Tapestry,
   Embassy Suites, Homewood/Home2 Suites, Tru, Tempo, Motto, Spark, LXR, Signia 등 (이름으로 판별).
 
+## 📱 안드로이드 앱 (가장 간단한 방법)
+
+휴대폰이 매일 아침 직접 가격을 검색해서 **폰 알림**으로 보여줍니다. 텔레그램·GitHub 설정이 필요 없어요.
+
+**다운로드:** https://github.com/grehful/tv-squat/releases/download/travel-alert-latest/travel-alert.apk
+(또는 저장소의 **Releases → 여행 가격 알림 앱 (최신)** 에서 `travel-alert.apk`)
+
+1. 휴대폰 브라우저로 위 링크를 열어 APK 받기 → 설치 (처음이면 "출처를 알 수 없는 앱 설치 허용" 필요)
+2. 앱을 열고 **알림 허용**
+3. **[설정]** 에 SerpApi 키 붙여넣기 → 알림 시각 고르기 → 저장 (키를 안 넣으면 가짜 가격으로 체험만 돼요)
+4. **[여행]** 에서 여행 추가/수정: 여행지 버튼(도쿄·오사카·방콕…)을 누르면 공항과 도시가 자동으로 채워져요.
+   출발 가능 기간, 몇 박, 항공사, 좌석, 경유, 성인·아이 나이·유아, 방 개수, 힐튼 호텔 검색 여부를 정할 수 있어요
+5. **[오늘 가격] → [지금 검색]** 으로 바로 확인. 이후에는 매일 정한 시각에 알림이 와요
+
+- 알림을 누르면 앱에서 항공편·호텔 상세와 **구글 항공권 / 호텔 보기** 버튼이 나와요.
+- 폰이 꺼져 있거나 인터넷이 없으면, 연결되는 대로 검색합니다. 알림이 안 오면 **[설정] → 배터리 최적화 설정** 에서
+  이 앱을 "제한 없음"으로 바꿔 주세요 (특히 삼성 폰).
+- 앱을 처음 열면 이 저장소의 `travel.json` 예시 여행이 들어 있어요. 앱 안에서 바꾼 내용은 폰에만 저장됩니다.
+- 직접 빌드: `./android-travel/build.sh` (필요 패키지는 파일 맨 위 참고), 엔진 테스트: `./android-travel/test.sh`
+
+아래는 휴대폰 대신 **GitHub Actions + 텔레그램/이메일** 로 받는 방법입니다.
+
 ## 1. 준비 (한 번만)
 
 1. **SerpApi 키** — https://serpapi.com 가입 → 대시보드의 API Key 복사.

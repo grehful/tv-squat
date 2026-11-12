@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>여행 가격 알림</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1 id="title">여행 가격 알림</h1>
+  <button id="back" class="icon hidden" aria-label="뒤로">‹</button>
+</header>
+
+<main>
+  <!-- 오늘의 가격 -->
+  <section id="page-home" class="page">
+    <div id="banner" class="banner hidden"></div>
+    <div class="row between">
+      <div>
+        <div id="updated" class="muted">아직 검색 전</div>
+        <div id="next" class="muted small"></div>
+      </div>
+      <button id="run" class="primary">지금 검색</button>
+    </div>
+    <div id="results"></div>
+  </section>
+
+  <!-- 여행 목록 -->
+  <section id="page-trips" class="page hidden">
+    <p class="muted small">여행마다 시기·기간·항공사·인원을 정하면 매일 아침 최저가를 찾아 알려줘요.</p>
+    <div id="trip-list"></div>
+    <button id="add-trip" class="wide">＋ 여행 추가</button>
+    <div id="quota" class="muted small center"></div>
+  </section>
+
+  <!-- 여행 편집 -->
+  <section id="page-edit" class="page hidden">
+    <form id="trip-form" autocomplete="off">
+      <label>이름 <input name="name" required placeholder="도쿄"></label>
+      <div class="grid2">
+        <label>출발 공항 <input name="origin" placeholder="ICN" class="upper"></label>
+        <label>도착 공항 <input name="destination" required placeholder="HND,NRT" class="upper"></label>
+      </div>
+      <div class="chips" id="dest-chips"></div>
+      <label>호텔 검색 도시 (영어) <input name="hotel_city" placeholder="Tokyo"></label>
+
+      <h3>시기 · 기간</h3>
+      <div class="grid2">
+        <label>출발 가능 시작일 <input type="date" name="depart_from" required></label>
+        <label>출발 가능 마지막날 <input type="date" name="depart_to" required></label>
+      </div>
+      <label>몇 박 (쉼표로 여러 개) <input name="nights" inputmode="numeric" placeholder="3,4" required></label>
+
+      <h3>항공</h3>
+      <label>항공사 (비우면 전체)</label>
+      <div class="chips" id="airline-chips"></div>
+      <input name="airlines" class="upper" placeholder="직접 입력: KE,OZ">
+      <div class="grid2">
+        <label>좌석
+          <select name="cabin">
+            <option value="economy">이코노미</option>
+            <option value="premium">프리미엄 이코노미</option>
+            <option value="business">비즈니스</option>
+            <option value="first">퍼스트</option>
+          </select>
+        </label>
+        <label>경유
+          <select name="max_stops">
+            <option value="0">직항만</option>
+            <option value="1">1회 경유까지</option>
+            <option value="2">2회 경유까지</option>
+            <option value="">상관없음</option>
+          </select>
+        </label>
+      </div>
+
+      <h3>인원</h3>
+      <div class="grid3">
+        <label>성인 <input type="number" name="adults" min="1" max="9" value="2"></label>
+        <label>유아(2세↓) <input type="number" name="infants" min="0" max="4" value="0"></label>
+        <label>방 개수 <input type="number" name="rooms" min="1" max="5" value="1"></label>
+      </div>
+      <label>아이 나이 (쉼표로, 없으면 비움) <input name="children_ages" inputmode="numeric" placeholder="7,10"></label>
+
+      <h3>호텔 · 검색</h3>
+      <label class="check"><input type="checkbox" name="hotel"> 힐튼 계열 호텔 가격도 찾기</label>
+      <label>하루 검색할 날짜 조합 수 <input type="number" name="max_searches" min="1" max="10" value="2"></label>
+      <p class="muted small" id="combo-hint"></p>
+      <label class="check"><input type="checkbox" name="enabled"> 매일 알림에 포함</label>
+
+      <div id="form-error" class="error hidden"></div>
+      <div class="row">
+        <button type="button" id="delete-trip" class="danger">삭제</button>
+        <button type="submit" class="primary grow">저장</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- 설정 -->
+  <section id="page-settings" class="page hidden">
+    <form id="settings-form" autocomplete="off">
+      <h3>SerpApi 키</h3>
+      <p class="muted small">serpapi.com 에 가입하면 받을 수 있어요. 비워두면 <b>체험 모드</b>(가짜 가격)로 동작해요.</p>
+      <input name="apiKey" placeholder="API Key 붙여넣기" spellcheck="false">
+      <div id="key-hint" class="muted small"></div>
+      <button type="button" id="clear-key" class="link hidden">키 지우기 (체험 모드)</button>
+
+      <h3>아침 알림</h3>
+      <label class="check"><input type="checkbox" name="alarmOn"> 매일 알림 받기</label>
+      <label>알림 시각 <input type="time" name="time" value="07:00"></label>
+      <p class="muted small">폰 상태에 따라 몇 분 늦게 올 수 있어요. 알림이 안 오면 아래에서 배터리 최적화를 꺼 주세요.</p>
+      <button type="button" id="battery">배터리 최적화 설정 열기</button>
+
+      <h3>기본값</h3>
+      <div class="grid2">
+        <label>기본 출발 공항 <input name="origin" class="upper" placeholder="ICN"></label>
+        <label>통화
+          <select name="currency">
+            <option value="KRW">원 (KRW)</option>
+            <option value="USD">달러 (USD)</option>
+            <option value="JPY">엔 (JPY)</option>
+          </select>
+        </label>
+      </div>
+      <button type="submit" class="primary wide">저장</button>
+      <button type="button" id="test-notify" class="wide">알림 시험 (지금 검색 + 알림)</button>
+      <button type="button" id="reset" class="link">여행 목록을 처음 예시로 되돌리기</button>
+    </form>
+  </section>
+</main>
+
+<nav>
+  <button data-page="home" class="active"><span>💰</span>오늘 가격</button>
+  <button data-page="trips"><span>🧳</span>여행</button>
+  <button data-page="settings"><span>⚙️</span>설정</button>
+</nav>
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

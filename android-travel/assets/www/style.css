@@ -1,0 +1,85 @@
+:root {
+  --bg: #f4f6fa; --card: #ffffff; --text: #141a24; --muted: #6b7686; --line: #e2e7ef;
+  --accent: #1e6fd9; --accent-text: #ffffff; --soft: #e8f0fc;
+  --down: #12a150; --up: #d93636; --warn-bg: #fff4d6; --warn: #7a5600;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1319; --card: #1a2029; --text: #e8edf4; --muted: #8d98a8; --line: #2a323e;
+    --accent: #5b9cf2; --accent-text: #0b1220; --soft: #1d2a3d;
+    --down: #3ccf7c; --up: #ff6b6b; --warn-bg: #3a2f12; --warn: #f3d27a;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Noto Sans KR", sans-serif; -webkit-tap-highlight-color: transparent; }
+header { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 14px 16px 8px; display: flex; align-items: center; gap: 8px; }
+header h1 { font-size: 20px; margin: 0; order: 2; }
+header .icon { order: 1; font-size: 28px; line-height: 1; background: none; border: 0; color: var(--text); padding: 0 6px 0 0; }
+main { padding: 0 16px 96px; }
+nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: var(--card); border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom); }
+nav button { flex: 1; background: none; border: 0; color: var(--muted); padding: 8px 0 10px; font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+nav button span { font-size: 20px; filter: grayscale(1); opacity: .7; }
+nav button.active { color: var(--accent); font-weight: 600; }
+nav button.active span { filter: none; opacity: 1; }
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.center { text-align: center; margin-top: 12px; }
+.row { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
+.between { justify-content: space-between; }
+.grow { flex: 1; }
+button { white-space: nowrap; font: inherit; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 10px 14px; }
+button:active { opacity: .7; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+button.danger { color: var(--up); }
+button.wide { width: 100%; margin-top: 10px; }
+button.link { background: none; border: 0; color: var(--accent); padding: 10px 0; }
+button:disabled { opacity: .5; }
+
+.card { background: var(--card); border-radius: 14px; padding: 14px; margin: 12px 0; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.card h2 { font-size: 17px; margin: 0; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.card .sub { color: var(--muted); font-size: 13px; margin: 2px 0 10px; }
+.total { font-size: 22px; font-weight: 700; white-space: nowrap; }
+.part { border-top: 1px solid var(--line); padding: 10px 0 2px; }
+.part .head { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+.part .price { white-space: nowrap; }
+.part .info { color: var(--muted); font-size: 13px; }
+.down { color: var(--down); font-weight: 600; font-size: 13px; }
+.up { color: var(--up); font-weight: 600; font-size: 13px; }
+.level { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--soft); margin-top: 4px; }
+.links { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.links button { padding: 6px 10px; font-size: 13px; }
+.err { color: var(--up); font-size: 13px; margin-top: 6px; }
+.banner { background: var(--warn-bg); color: var(--warn); border-radius: 12px; padding: 10px 12px; margin: 4px 0 8px; font-size: 14px; }
+.empty { text-align: center; color: var(--muted); padding: 40px 10px; }
+
+.trip { display: flex; align-items: center; gap: 12px; }
+.trip .grow { min-width: 0; }
+.trip .grow div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trip.off { opacity: .55; }
+.switch { position: relative; width: 46px; height: 28px; flex: none; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; background: var(--line); border-radius: 99px; transition: .2s; }
+.switch span::after { content: ""; position: absolute; width: 22px; height: 22px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(18px); }
+
+form h3 { font-size: 15px; margin: 22px 0 6px; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0; }
+input, select { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 16px; color: var(--text); background: var(--card);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-height: 44px; }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+input.upper { text-transform: uppercase; }
+label.check { display: flex; align-items: center; gap: 10px; color: var(--text); font-size: 15px; }
+label.check input { width: 22px; height: 22px; min-height: 0; margin: 0; flex: none; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.chips button { white-space: normal; padding: 5px 10px; font-size: 13px; border-radius: 99px; }
+.chips button.on { background: var(--soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.error { background: var(--warn-bg); color: var(--up); padding: 10px; border-radius: 10px; margin-top: 12px; }
+.toast { position: fixed; left: 16px; right: 16px; bottom: 84px; background: var(--text); color: var(--bg); padding: 12px 14px; border-radius: 12px; text-align: center; z-index: 5; }
+.spin { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s .8s linear infinite; vertical-align: -2px; }
+@keyframes s { to { transform: rotate(360deg); } }

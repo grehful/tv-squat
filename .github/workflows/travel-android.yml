@@ -1,0 +1,38 @@
+name: Travel alert APK
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["android-travel/**", "travel.json", ".github/workflows/travel-android.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: travel-android-${{ github.ref }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aapt apksigner zipalign dalvik-exchange android-sdk-platform-23
+      - name: Test
+        run: ./android-travel/test.sh
+      - name: Build APK
+        run: ./android-travel/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: travel-alert-apk
+          path: android-travel/build/travel-alert.apk
+      - name: Publish download (Releases → travel-alert-latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete travel-alert-latest --yes --cleanup-tag || true
+          gh release create travel-alert-latest android-travel/build/travel-alert.apk \
+            --target "$GITHUB_SHA" --title "여행 가격 알림 앱 (최신)" \
+            --notes "휴대폰에서 travel-alert.apk 를 눌러 받은 뒤 설치하세요. 빌드: ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}"

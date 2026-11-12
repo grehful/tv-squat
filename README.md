@@ -1,6 +1,6 @@
 # TV 스쿼트 📺🏋️
 
-> ✈️ 같은 저장소에 **매일 아침 여행 가격 알림**(항공권 + 힐튼 호텔)도 있어요 → [TRAVEL_ALERT.md](TRAVEL_ALERT.md)
+> ✈️ 같은 저장소에 **매일 아침 여행 가격 알림**(항공권 + 힐튼 호텔)도 있어요 → [TRAVEL_ALERT.md](TRAVEL_ALERT.md) · [📱 앱 다운로드](https://github.com/grehful/tv-squat/releases/download/travel-alert-latest/travel-alert.apk)
 
 아이들이 TV를 보는 동안 **카메라로 스쿼트를 세고**, 정해진 시간마다 할당량을 못 채우면 **삼성 TV를 꺼버리는** 프로그램입니다.
 
