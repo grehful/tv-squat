@@ -131,15 +131,21 @@ final class Prices {
         return v instanceof Number ? ((Number) v).intValue() : null;
     }
 
+    /** 힐튼 브랜드 필터로 검색한 결과인지 (그렇다면 이름에 힐튼이 없어도 힐튼 계열). */
+    static final String BRAND_FILTERED = "_hilton_brand_filtered";
+
     static List<Hotel> parseHotels(JSONObject data, int nights, int rooms) {
         List<Hotel> out = new ArrayList<>();
         JSONArray props = data.optJSONArray("properties");
+        if (props == null && data.has("name")) props = new JSONArray().put(data); // 호텔 1곳만 나온 경우
         if (props == null) return out;
+        boolean brandFiltered = data.optBoolean(BRAND_FILTERED);
         for (int i = 0; i < props.length(); i++) {
             JSONObject p = props.optJSONObject(i);
             if (p == null) continue;
             String name = p.optString("name", "");
-            if (!isHilton(name) || "vacation rental".equals(p.optString("type"))) continue;
+            if ("vacation rental".equals(p.optString("type"))) continue;
+            if (!brandFiltered && !isHilton(name)) continue;
             Integer per = amount(p.opt("rate_per_night"));
             Integer total = amount(p.opt("total_rate"));
             if (per == null && total == null) continue;
@@ -161,14 +167,43 @@ final class Prices {
         return out;
     }
 
+    /** Google Hotels 응답의 brands 목록에서 힐튼 계열 브랜드 id 들을 찾는다 ("1,2,3", 없으면 null). */
+    static String hiltonBrandIds(JSONObject data) {
+        List<String> ids = new ArrayList<>();
+        collectBrands(data.optJSONArray("brands"), false, ids);
+        return ids.isEmpty() ? null : join(ids.toArray(new String[0]));
+    }
+
+    private static void collectBrands(JSONArray brands, boolean parentHilton, List<String> ids) {
+        if (brands == null) return;
+        for (int i = 0; i < brands.length(); i++) {
+            JSONObject b = brands.optJSONObject(i);
+            if (b == null) continue;
+            boolean hilton = parentHilton || isHilton(b.optString("name", ""));
+            String id = b.has("id") ? String.valueOf(b.opt("id")) : null;
+            if (hilton && id != null && !ids.contains(id)) ids.add(id);
+            collectBrands(b.optJSONArray("children"), hilton, ids);
+        }
+    }
+
+    /** SerpApi 가 돌려준 오류 (인터넷 문제가 아니므로 다시 시도하지 않음). */
+    static final class ApiError extends IOException {
+        ApiError(String m) { super(m); }
+    }
+
     /** 실제 SerpApi 호출. */
     static final class SerpApi implements Client {
         private final String apiKey, currency;
         private int calls;
+        String hiltonBrands; // 한 번 찾으면 저장해 두고 계속 씀 (Runner 가 보관)
+        long retryDelayMs = 4000;
+        String baseUrl = "https://serpapi.com/search.json"; // 테스트에서 바꿈
+        private boolean offline; // 인터넷이 끊긴 게 확인되면 남은 검색은 기다리지 않고 바로 건너뜀
 
-        SerpApi(String apiKey, String currency) {
+        SerpApi(String apiKey, String currency, String hiltonBrands) {
             this.apiKey = apiKey;
             this.currency = currency;
+            this.hiltonBrands = hiltonBrands;
         }
 
         @Override
@@ -208,41 +243,100 @@ final class Prices {
                 for (int i = 0; i < ages.length; i++) ages[i] = String.valueOf(t.childAges[i]);
                 p.put("children_ages", join(ages));
             }
-            p.put("sort_by", 3);
             p.put("hl", "en");
             p.put("gl", "kr");
-            return get(p);
+            if (hiltonBrands != null) return brandSearch(p, t);
+            // 브랜드 id 를 아직 모르면: 관련도순으로 "Hilton hotels in 도시" 검색 (최저가순으로 하면
+            // 싼 일반 숙소가 첫 페이지를 채워 힐튼이 빠진다) → 응답의 brands 목록에서 힐튼 id 를 찾아 다시 검색
+            p.put("q", "Hilton hotels in " + t.hotelCity);
+            JSONObject first = get(p);
+            String ids = hiltonBrandIds(first);
+            if (ids == null) return first;
+            hiltonBrands = ids;
+            try {
+                JSONObject byBrand = brandSearch(p, t);
+                return parseHotels(byBrand, 1, 1).isEmpty() ? first : byBrand;
+            } catch (IOException e) {
+                return first;
+            }
         }
 
+        private JSONObject brandSearch(Map<String, Object> p, Trip t) throws IOException, JSONException {
+            p.put("q", "hotels in " + t.hotelCity);
+            p.put("brands", hiltonBrands);
+            p.put("sort_by", 3); // 힐튼 계열 안에서 최저가순
+            return get(p).put(BRAND_FILTERED, true);
+        }
+
+        /** 인터넷이 잠깐 끊긴 경우(주소 못 찾음, 시간 초과 등)는 조금 기다렸다가 두 번 더 시도한다. */
         private JSONObject get(Map<String, Object> params) throws IOException, JSONException {
+            IOException last = null;
+            for (int attempt = 0; attempt < (offline ? 1 : 3); attempt++) {
+                if (attempt > 0) {
+                    try {
+                        Thread.sleep(retryDelayMs * attempt);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+                try {
+                    JSONObject r = getOnce(params);
+                    offline = false;
+                    return r;
+                } catch (ApiError e) {
+                    offline = false;
+                    throw e;
+                } catch (IOException e) {
+                    last = e;
+                }
+            }
+            offline = true;
+            throw new IOException(networkMessage(last), last);
+        }
+
+        private JSONObject getOnce(Map<String, Object> params) throws IOException, JSONException {
             params.put("currency", currency);
             params.put("api_key", apiKey);
-            StringBuilder q = new StringBuilder("https://serpapi.com/search.json?");
+            StringBuilder q = new StringBuilder(baseUrl).append('?');
             for (Map.Entry<String, Object> e : params.entrySet()) {
                 if (q.charAt(q.length() - 1) != '?') q.append('&');
                 q.append(e.getKey()).append('=').append(URLEncoder.encode(String.valueOf(e.getValue()), "UTF-8"));
             }
-            calls++;
             HttpURLConnection c = (HttpURLConnection) new URL(q.toString()).openConnection();
             c.setConnectTimeout(20_000);
             c.setReadTimeout(90_000);
             try {
                 int code = c.getResponseCode();
+                calls++;
                 InputStream in = code < 400 ? c.getInputStream() : c.getErrorStream();
                 String body = in == null ? "" : read(in);
                 JSONObject json;
                 try {
                     json = new JSONObject(body);
                 } catch (JSONException e) {
-                    throw new IOException("HTTP " + code);
+                    if (code >= 500) throw new IOException("SerpApi 서버 오류 (HTTP " + code + ")");
+                    throw new ApiError("HTTP " + code);
                 }
-                if (json.has("error")) throw new IOException(json.optString("error"));
-                if (code >= 400) throw new IOException("HTTP " + code);
+                String error = json.optString("error", "");
+                // 조건에 맞는 항공편/호텔이 없을 때도 error 로 온다 → 오류가 아니라 '결과 없음'
+                if (error.contains("hasn't returned any results")) return new JSONObject().put("no_results", true);
+                if (!error.isEmpty()) throw new ApiError(error);
+                if (code >= 500) throw new IOException("SerpApi 서버 오류 (HTTP " + code + ")");
+                if (code >= 400) throw new ApiError("HTTP " + code);
                 return json;
             } finally {
                 c.disconnect();
             }
         }
+    }
+
+    static String networkMessage(IOException e) {
+        if (e instanceof java.net.UnknownHostException || e instanceof java.net.ConnectException) {
+            return "인터넷 연결이 끊겨 serpapi.com 에 접속하지 못했어요 (다음 검색 때 다시 확인)";
+        }
+        if (e instanceof java.net.SocketTimeoutException) return "응답이 너무 늦어 건너뛰었어요 (다음 검색 때 다시 확인)";
+        return e == null ? "인터넷 오류" : String.valueOf(e.getMessage());
     }
 
     static String join(String[] parts) {

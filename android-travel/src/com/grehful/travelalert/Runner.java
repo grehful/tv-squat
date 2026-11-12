@@ -53,7 +53,7 @@ final class Runner {
             int today = Day.todayKst(System.currentTimeMillis());
             boolean demo = key.isEmpty();
             Prices.Client client = demo ? new DemoClient(today)
-                    : new Prices.SerpApi(key, root.optString("currency", "KRW"));
+                    : new Prices.SerpApi(key, root.optString("currency", "KRW"), p.getString("hiltonBrands", null));
             JSONObject history = demo ? new JSONObject() : new JSONObject(p.getString("history", "{}"));
             JSONObject combos = demo ? new JSONObject() : new JSONObject(p.getString("combos", "{}"));
             java.util.List<Trip> trips = Trip.parseAll(root);
@@ -63,6 +63,9 @@ final class Runner {
             result.put("at", System.currentTimeMillis());
             SharedPreferences.Editor e = p.edit().putString("last", result.toString()).remove("lastError");
             if (!demo) e.putString("history", history.toString()).putString("combos", combos.toString());
+            if (client instanceof Prices.SerpApi && ((Prices.SerpApi) client).hiltonBrands != null) {
+                e.putString("hiltonBrands", ((Prices.SerpApi) client).hiltonBrands);
+            }
             e.apply();
             return result;
         } catch (Exception | Error ex) {

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import urllib.parse
+import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import date
@@ -55,21 +57,83 @@ class Hotel:
     link: str | None
 
 
+BRAND_FILTERED = "_hilton_brand_filtered"
+
+
+class ApiError(RuntimeError):
+    """SerpApi 가 돌려준 오류 (인터넷 문제가 아니므로 다시 시도하지 않음)."""
+
+
+def hilton_brand_ids(data: dict) -> str | None:
+    """Google Hotels 응답의 brands 목록에서 힐튼 계열 브랜드 id 들 ("1,2,3")."""
+    ids: list[str] = []
+
+    def walk(brands, parent_hilton):
+        for b in brands or []:
+            if not isinstance(b, dict):
+                continue
+            hilton = parent_hilton or is_hilton(b.get("name", ""))
+            if hilton and "id" in b and str(b["id"]) not in ids:
+                ids.append(str(b["id"]))
+            walk(b.get("children"), hilton)
+
+    walk(data.get("brands"), False)
+    return ",".join(ids) or None
+
+
 class SerpApiClient:
-    def __init__(self, api_key: str, currency: str = "KRW", timeout: float = 60):
+    def __init__(self, api_key: str, currency: str = "KRW", timeout: float = 60,
+                 hilton_brands: str | None = None, base_url: str = API_URL, retry_delay: float = 4):
         self.api_key = api_key
         self.currency = currency
         self.timeout = timeout
         self.calls = 0
+        self.hilton_brands = hilton_brands  # 한 번 찾으면 기록에 저장해 두고 계속 씀
+        self.base_url = base_url
+        self.retry_delay = retry_delay
+        self.offline = False  # 인터넷이 끊긴 게 확인되면 남은 검색은 기다리지 않고 건너뜀
 
     def _get(self, params: dict) -> dict:
+        """인터넷이 잠깐 끊긴 경우는 조금 기다렸다가 두 번 더 시도한다."""
+        last = None
+        for attempt in range(1 if self.offline else 3):
+            if attempt:
+                time.sleep(self.retry_delay * attempt)
+            try:
+                data = self._get_once(params)
+                self.offline = False
+                return data
+            except ApiError:
+                self.offline = False
+                raise
+            except (OSError, ValueError) as e:  # URLError, 시간 초과, 깨진 응답
+                last = e
+        self.offline = True
+        raise RuntimeError(f"인터넷 연결 문제로 SerpApi 에 접속하지 못했어요 (다음 검색 때 다시 확인): {last}")
+
+    def _get_once(self, params: dict) -> dict:
         params = {**params, "api_key": self.api_key, "currency": self.currency}
-        url = API_URL + "?" + urllib.parse.urlencode(params)
-        self.calls += 1
-        with urllib.request.urlopen(url, timeout=self.timeout) as r:
-            data = json.load(r)
-        if data.get("error"):
-            raise RuntimeError(data["error"])
+        url = self.base_url + "?" + urllib.parse.urlencode(params)
+        try:
+            with urllib.request.urlopen(url, timeout=self.timeout) as r:
+                self.calls += 1
+                data = json.load(r)
+        except urllib.error.HTTPError as e:
+            self.calls += 1
+            try:
+                data = json.load(e)
+            except ValueError:
+                data = {}
+            if e.code >= 500 and not data.get("error"):
+                raise OSError(f"SerpApi 서버 오류 (HTTP {e.code})") from e
+            if not data.get("error"):
+                raise ApiError(f"HTTP {e.code}") from e
+        error = data.get("error") or ""
+        # 조건에 맞는 항공편/호텔이 없을 때도 error 로 온다 → 오류가 아니라 '결과 없음'
+        if "hasn't returned any results" in error:
+            return {"no_results": True}
+        if error:
+            raise ApiError(error)
         return data
 
     def flights(self, trip: Trip, outbound: date, inbound: date) -> dict:
@@ -101,14 +165,32 @@ class SerpApiClient:
             "check_out_date": check_out.isoformat(),
             # 방 1개 기준 인원 (방 여러 개면 나눠서 검색 후 곱함)
             "adults": max(1, -(-t.adults // trip.rooms)),
-            "sort_by": 3,  # 최저가순
             "hl": "en",  # 브랜드 이름 판별이 쉬운 영어로
             "gl": "kr",
         }
         if t.children and trip.rooms == 1:
             p["children"] = t.children
             p["children_ages"] = ",".join(str(a) for a in t.children_ages)
-        return self._get(p)
+        if self.hilton_brands:
+            return self._brand_search(p, trip)
+        # 브랜드 id 를 아직 모르면 관련도순으로 검색 (최저가순이면 싼 일반 숙소가 첫 페이지를 채워 힐튼이 빠짐)
+        # → 응답의 brands 목록에서 힐튼 id 를 찾아 힐튼 계열만 최저가순으로 다시 검색
+        first = self._get(p)
+        ids = hilton_brand_ids(first)
+        if not ids:
+            return first
+        self.hilton_brands = ids
+        try:
+            by_brand = self._brand_search(p, trip)
+        except (RuntimeError, OSError):
+            return first
+        return by_brand if parse_hotels(by_brand, 1) else first
+
+    def _brand_search(self, p: dict, trip: Trip) -> dict:
+        p = {**p, "q": f"hotels in {trip.hotel_city}", "brands": self.hilton_brands, "sort_by": 3}
+        data = self._get(p)
+        data[BRAND_FILTERED] = True
+        return data
 
 
 def parse_flights(data: dict, outbound: date, inbound: date) -> list[Flight]:
@@ -149,9 +231,13 @@ def _num(v) -> int | None:
 
 def parse_hotels(data: dict, nights: int, rooms: int = 1) -> list[Hotel]:
     out = []
-    for p in data.get("properties") or []:
+    props = data.get("properties")
+    if props is None and data.get("name"):
+        props = [data]  # 호텔 1곳 상세만 나온 경우
+    brand_filtered = data.get(BRAND_FILTERED, False)
+    for p in props or []:
         name = p.get("name", "")
-        if not is_hilton(name) or p.get("type") == "vacation rental":
+        if p.get("type") == "vacation rental" or not (brand_filtered or is_hilton(name)):
             continue
         per_night = _num(p.get("rate_per_night"))
         total = _num(p.get("total_rate"))
@@ -182,6 +268,7 @@ class TripResult:
     searched: int = 0
     checked_combos: int = 0
     total_combos: int = 0
+    empty_combos: int = 0
 
     @property
     def best_flight(self) -> Flight | None:
@@ -225,7 +312,7 @@ def search_trip(client, trip: Trip, today: date, cache: dict | None = None) -> T
         try:
             flights = parse_flights(client.flights(trip, outbound, inbound), outbound, inbound)
         except Exception as e:  # noqa: BLE001 - 한 날짜 실패해도 나머지는 계속
-            res.errors.append(f"항공 {outbound:%m/%d} {(inbound - outbound).days}박: {e}")
+            res.errors.append(f"항공 {outbound.month}/{outbound.day} {(inbound - outbound).days}박: {e}")
             continue
         res.searched += 1
         cache[key] = flight_to_cache(flights[0], today) if flights else {"none": True, "checked": today.isoformat()}
@@ -234,6 +321,7 @@ def search_trip(client, trip: Trip, today: date, cache: dict | None = None) -> T
         if k not in valid:
             del cache[k]
     res.checked_combos = len(cache)
+    res.empty_combos = sum(1 for e in cache.values() if e.get("none"))
     res.total_combos = len(combos)
     res.flights = sorted((flight_from_cache(e, *valid[k]) for k, e in cache.items() if "price" in e),
                          key=lambda f: f.price)

@@ -144,7 +144,7 @@ function tripCard(t, i) {
   h += '</div>';
   if (t.combosTotal) {
     const full = t.combosChecked >= t.combosTotal;
-    h += `<div class="info small muted">날짜 조합 ${t.combosTotal}개 중 ${t.combosChecked}개 확인${full ? '' : ' (나머지는 다음 검색 때 이어서 확인)'} · 오늘 ${t.searchedToday}회 검색</div>`;
+    h += `<div class="info small muted">날짜 조합 ${t.combosTotal}개 중 ${t.combosChecked}개 확인${t.combosEmpty ? ` (그중 ${t.combosEmpty}개는 조건에 맞는 항공편 없음)` : ''}${full ? '' : ' · 나머지는 다음 검색 때 이어서 확인'} · 오늘 ${t.searchedToday}회 검색</div>`;
   }
   if (!f) {
     h += '<div class="part"><div class="info">항공권 결과가 없어요</div></div>';
@@ -160,7 +160,7 @@ function tripCard(t, i) {
   }
   if (t.hotelWanted && f) {
     const hs = t.hotels || [];
-    if (!hs.length) h += '<div class="part"><div class="info">🏨 힐튼 계열 호텔 결과가 없어요</div></div>';
+    if (!hs.length) h += `<div class="part"><div class="info">🏨 ${esc(f.outbound)}~${esc(f.inbound)} ${esc(t.hotelCity || '')} 힐튼 계열 호텔 빈방/가격 결과가 없어요</div></div>`;
     hs.forEach((x, j) => {
       h += `<div class="part"><div class="head"><span>${j ? '' : '🏨 '}${esc(x.name)}</span><span class="price">${money(x.total)} ${j ? '' : delta(t.hotelDelta)}</span></div>
         <div class="info">1박 ${money(x.perNight)}${x.rating ? ` · ⭐ ${x.rating}` : ''}</div></div>`;

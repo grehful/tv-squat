@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from datetime import date
@@ -223,6 +224,109 @@ class ReportTest(unittest.TestCase):
             for i in range(1, 6):
                 h = save_history(path, h, date(2026, 11, i), [], keep_days=3)
             self.assertEqual(sorted(h), ["2026-11-03", "2026-11-04", "2026-11-05"])
+
+
+class FakeSerpApi:
+    """PC 안에 띄우는 가짜 SerpApi 서버."""
+
+    def __enter__(self):
+        import http.server
+        import threading
+        import urllib.parse as up
+        queries = self.queries = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                q = up.unquote(self.path)
+                queries.append(q)
+                code = 200
+                if "arrival_id=NONE" in q:
+                    body = {"error": "Google Flights hasn't returned any results for this query."}
+                elif "arrival_id=BAD" in q:
+                    body, code = {"error": "Invalid API key."}, 401
+                elif "brands=" in q:
+                    body = {"properties": [{"name": "The Curio Place", "rate_per_night": {"extracted_lowest": 150000}},
+                                           {"name": "Hilton Danang", "rate_per_night": {"extracted_lowest": 180000}}]}
+                elif "google_hotels" in q:
+                    body = {"brands": [{"id": 17, "name": "Marriott"},
+                                       {"id": 28, "name": "Hilton Worldwide", "children": [{"id": 44, "name": "DoubleTree"}]}],
+                            "properties": [{"name": "Cheap Hostel", "rate_per_night": {"extracted_lowest": 10000}},
+                                           {"name": "Hilton Danang", "rate_per_night": {"extracted_lowest": 190000}}]}
+                else:
+                    body = {"best_flights": [{"price": 300000, "flights": [{"airline": "KE"}]}]}
+                data = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_port}/search.json"
+        return self
+
+    def __exit__(self, *a):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class SerpApiClientTest(unittest.TestCase):
+    def setUp(self):
+        self.trip = cfg.parse({"trips": [{"name": "다낭", "destination": "DAD", "hotel_city": "Da Nang",
+                                          "depart_from": "2026-12-25"}]}).trips[0]
+        self.d = date(2026, 12, 25)
+
+    def test_http_paths(self):
+        from travelalert.prices import ApiError, SerpApiClient
+        t, d, e = self.trip, self.d, date(2026, 12, 30)
+        with FakeSerpApi() as srv:
+            api = SerpApiClient("k", base_url=srv.url, retry_delay=0)
+            self.assertEqual(len(parse_flights(api.flights(t, d, e), d, e)), 1)
+            t.destination = "NONE"
+            self.assertEqual(parse_flights(api.flights(t, d, e), d, e), [])  # 결과 없음 = 빈 결과
+            t.destination = "BAD"
+            n = len(srv.queries)
+            with self.assertRaises(ApiError):
+                api.flights(t, d, e)
+            self.assertEqual(len(srv.queries) - n, 1)  # API 오류는 다시 시도 안 함
+            n = len(srv.queries)
+            hs = parse_hotels(api.hotels(t, d, e), 5)
+            self.assertEqual(len(srv.queries) - n, 2)
+            self.assertNotIn("sort_by", srv.queries[n])
+            self.assertIn("brands=28,44", srv.queries[n + 1])
+            self.assertEqual(api.hilton_brands, "28,44")
+            self.assertEqual([h.name for h in hs], ["The Curio Place", "Hilton Danang"])
+            n = len(srv.queries)
+            api.hotels(t, d, e)
+            self.assertEqual(len(srv.queries) - n, 1)
+            url = srv.url
+        # 서버가 꺼짐 = 인터넷 끊김: 3번 시도 후 실패, 그다음은 바로 건너뜀
+        off = SerpApiClient("k", base_url=url, retry_delay=0)
+        t.destination = "DAD"
+        with self.assertRaisesRegex(RuntimeError, "인터넷 연결"):
+            off.flights(t, d, e)
+        self.assertTrue(off.offline)
+
+    def test_offline_errors_do_not_mark_combo_checked(self):
+        class Off:
+            def flights(self, *a):
+                raise RuntimeError("인터넷 연결 문제")
+
+            def hotels(self, *a):
+                return {}
+
+        cache = {}
+        r = search_trip(Off(), trip(max_searches=0), TODAY, cache)
+        self.assertEqual(cache, {})
+        self.assertEqual(len(r.errors), 12)
+
+    def test_single_property_and_brand_ids(self):
+        from travelalert.prices import hilton_brand_ids
+        self.assertEqual(len(parse_hotels({"name": "Conrad Osaka", "rate_per_night": {"extracted_lowest": 1}}, 2)), 1)
+        self.assertIsNone(hilton_brand_ids({"brands": [{"id": 1, "name": "Accor"}]}))
 
 
 class NotifyTest(unittest.TestCase):

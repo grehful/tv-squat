@@ -23,7 +23,7 @@ final class Engine {
         List<Prices.Flight> flights = new ArrayList<>(); // 날짜 조합별 최저가, 싼 순
         List<Prices.Hotel> hotels = new ArrayList<>();
         List<String> errors = new ArrayList<>();
-        int searched, checkedCombos, totalCombos;
+        int searched, checkedCombos, totalCombos, emptyCombos;
 
         Prices.Flight best() { return flights.isEmpty() ? null : flights.get(0); }
 
@@ -68,6 +68,7 @@ final class Engine {
             if (e == null) continue;
             keep.put(key, e);
             r.checkedCombos++;
+            if (e.optBoolean("none")) r.emptyCombos++;
             if (e.has("price")) r.flights.add(Prices.Flight.fromJson(e, d[0], d[1]));
         }
         Iterator<String> it = cache.keys();
@@ -180,11 +181,13 @@ final class Engine {
         JSONObject o = new JSONObject();
         o.put("name", t.name);
         o.put("route", t.origin + " → " + t.destination.replace(",", "/"));
+        o.put("hotelCity", t.hotelCity);
         o.put("travelers", t.travelersLabel());
         o.put("cabin", t.cabin);
         o.put("hotelWanted", t.hotel);
         o.put("combosChecked", r.checkedCombos);
         o.put("combosTotal", r.totalCombos);
+        o.put("combosEmpty", r.emptyCombos);
         o.put("searchedToday", r.searched);
         Prices.Flight f = r.best();
         if (f != null) {

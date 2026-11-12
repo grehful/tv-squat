@@ -39,10 +39,12 @@ def main(argv: list[str] | None = None) -> int:
         if not key:
             print("SERPAPI_API_KEY 환경변수가 필요합니다 (시험만 하려면 --demo).", file=sys.stderr)
             return 2
-        client = SerpApiClient(key, conf.currency)
+        client = None
 
     history_path = Path(args.history)
     history = load_history(history_path)
+    if client is None:
+        client = SerpApiClient(key, conf.currency, hilton_brands=history.get("_hilton_brands"))
     old = history.get("_combos", {}) if not args.demo else {}
     combos = {}
     results = []
@@ -56,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     print(text)
     print(f"\n(API 호출 {client.calls}회)", file=sys.stderr)
     if not args.demo:
+        if client.hilton_brands:
+            history["_hilton_brands"] = client.hilton_brands
         save_history(history_path, history, today, results, combos=combos)
 
     if args.dry_run:

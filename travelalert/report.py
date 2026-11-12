@@ -101,7 +101,8 @@ def build_message(results: list[TripResult], today: date, currency: str = "KRW",
             stops = "직항" if f.stops == 0 else f"경유 {f.stops}회"
             lines.append(f"  🗓 {_d(f.outbound)} → {_d(f.inbound)} ({nights}박){_ago(f.checked, today)}")
             if r.total_combos:
-                lines.append(f"     날짜 조합 {r.total_combos}개 중 {r.checked_combos}개 확인 · 오늘 {r.searched}회 검색")
+                empty = f" (그중 {r.empty_combos}개는 조건에 맞는 항공편 없음)" if r.empty_combos else ""
+                lines.append(f"     날짜 조합 {r.total_combos}개 중 {r.checked_combos}개 확인{empty} · 오늘 {r.searched}회 검색")
             lines.append(f"  🛫 {won(f.price, currency)}{_delta(f.price, p.get('flight'), currency)}"
                          f" · {', '.join(f.airlines)} {stops}")
             detail = " / ".join(x for x in f.flight_numbers if x)
@@ -125,7 +126,7 @@ def build_message(results: list[TripResult], today: date, currency: str = "KRW",
                 for o in r.hotels[1:3]:
                     lines.append(f"     · {o.name} {won(o.total, currency)}")
             else:
-                lines.append("  🏨 힐튼 계열 호텔: 조회 결과 없음")
+                lines.append(f"  🏨 {_d(f.outbound)}~{_d(f.inbound)} {t.hotel_city} 힐튼 계열 호텔: 빈방/가격 결과 없음")
         if r.total is not None and r.best_hotel:
             lines.append(f"  💰 합계 {won(r.total, currency)}{_delta(r.total, p.get('total'), currency)}")
         for e in r.errors:

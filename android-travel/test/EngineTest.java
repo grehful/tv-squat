@@ -46,6 +46,98 @@ public class EngineTest {
         check(String.valueOf(a).equals(String.valueOf(b)), what + " (" + a + " != " + b + ")");
     }
 
+    /** PC 안에 가짜 SerpApi 서버를 띄워서 실제 HTTP 호출 경로를 시험. */
+    static void serpApiTests() throws Exception {
+        final java.util.List<String> queries = new java.util.ArrayList<>();
+        com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/search.json", new com.sun.net.httpserver.HttpHandler() {
+            public void handle(com.sun.net.httpserver.HttpExchange ex) throws java.io.IOException {
+                String q = java.net.URLDecoder.decode(ex.getRequestURI().getRawQuery(), "UTF-8");
+                queries.add(q);
+                String body;
+                int code = 200;
+                if (q.contains("arrival_id=NONE")) {
+                    body = "{\"error\":\"Google Flights hasn't returned any results for this query.\"}";
+                } else if (q.contains("arrival_id=BAD")) {
+                    body = "{\"error\":\"Invalid API key.\"}";
+                    code = 401;
+                } else if (q.contains("brands=")) {
+                    body = "{\"properties\":[{\"name\":\"The Curio Place\",\"rate_per_night\":{\"extracted_lowest\":150000}},"
+                            + "{\"name\":\"Hilton Danang\",\"rate_per_night\":{\"extracted_lowest\":180000}}]}";
+                } else if (q.contains("google_hotels")) {
+                    body = "{\"brands\":[{\"id\":17,\"name\":\"Marriott\"},{\"id\":28,\"name\":\"Hilton Worldwide\",\"children\":[{\"id\":44,\"name\":\"DoubleTree\"}]}],"
+                            + "\"properties\":[{\"name\":\"Cheap Hostel\",\"rate_per_night\":{\"extracted_lowest\":10000}},"
+                            + "{\"name\":\"Hilton Danang\",\"rate_per_night\":{\"extracted_lowest\":190000}}]}";
+                } else {
+                    body = "{\"best_flights\":[{\"price\":300000,\"flights\":[{\"airline\":\"KE\"}]}]}";
+                }
+                byte[] b = body.getBytes("UTF-8");
+                ex.sendResponseHeaders(code, b.length);
+                ex.getResponseBody().write(b);
+                ex.close();
+            }
+        });
+        server.start();
+        String base = "http://127.0.0.1:" + server.getAddress().getPort() + "/search.json";
+        Trip t = Trip.parseAll(new JSONObject("{\"trips\":[{\"name\":\"다낭\",\"destination\":\"DAD\",\"hotel_city\":\"Da Nang\",\"depart_from\":\"2026-12-25\"}]}")).get(0);
+        int d = Day.parse("2026-12-25");
+        try {
+            Prices.SerpApi api = new Prices.SerpApi("k", "KRW", null);
+            api.baseUrl = base;
+            api.retryDelayMs = 1;
+            eq(Prices.parseFlights(api.flights(t, d, d + 5), d, d + 5).size(), 1, "flights via http");
+            // 결과 없음은 오류가 아니라 빈 결과
+            t.destination = "NONE";
+            JSONObject none = api.flights(t, d, d + 5);
+            eq(Prices.parseFlights(none, d, d + 5).size(), 0, "no results = empty");
+            // API 오류는 다시 시도하지 않음
+            t.destination = "BAD";
+            int before = queries.size();
+            try {
+                api.flights(t, d, d + 5);
+                check(false, "api error should throw");
+            } catch (Prices.ApiError e) {
+                eq(e.getMessage(), "Invalid API key.", "api error message");
+            }
+            eq(queries.size() - before, 1, "api error not retried");
+            // 호텔: 처음엔 관련도순 검색 → 힐튼 브랜드 id 찾음 → 브랜드로 다시 최저가순 검색
+            before = queries.size();
+            java.util.List<Prices.Hotel> hs = Prices.parseHotels(api.hotels(t, d, d + 5), 5, 1);
+            eq(queries.size() - before, 2, "hotel discovery = 2 calls");
+            check(!queries.get(before).contains("sort_by"), "first hotel query by relevance " + queries.get(before));
+            check(queries.get(before + 1).contains("brands=28,44") && queries.get(before + 1).contains("sort_by=3"), "brand query " + queries.get(before + 1));
+            eq(api.hiltonBrands, "28,44", "brand ids");
+            eq(hs.size(), 2, "brand filtered accepts all");
+            eq(hs.get(0).name, "The Curio Place", "cheapest in brand");
+            before = queries.size();
+            api.hotels(t, d, d + 5);
+            eq(queries.size() - before, 1, "known brands = 1 call");
+        } finally {
+            server.stop(0);
+        }
+        // 인터넷이 끊김: 3번 시도 후 실패, 그다음부터는 바로 건너뜀
+        Prices.SerpApi off = new Prices.SerpApi("k", "KRW", null);
+        off.baseUrl = base; // 서버가 꺼졌으니 연결 거부
+        off.retryDelayMs = 1;
+        t.destination = "DAD";
+        try {
+            off.flights(t, d, d + 5);
+            check(false, "offline should throw");
+        } catch (java.io.IOException e) {
+            check(e.getMessage().contains("인터넷 연결"), "friendly offline message " + e.getMessage());
+        }
+        long start = System.currentTimeMillis();
+        off.retryDelayMs = 5000;
+        try {
+            off.flights(t, d, d + 6);
+        } catch (java.io.IOException expected) {
+        }
+        check(System.currentTimeMillis() - start < 3000, "fail fast once offline");
+        // 호텔 응답이 1곳 상세로 올 때
+        eq(Prices.parseHotels(new JSONObject("{\"name\":\"Conrad Osaka\",\"rate_per_night\":{\"extracted_lowest\":300000}}"), 2, 1).size(), 1, "single property");
+        eq(Prices.hiltonBrandIds(new JSONObject("{\"brands\":[{\"id\":1,\"name\":\"Accor\"}]}")), null, "no hilton brand");
+    }
+
     public static void main(String[] args) throws Exception {
         // 날짜
         eq(Day.iso(Day.parse("2027-02-05")), "2027-02-05", "iso");
@@ -179,6 +271,8 @@ public class EngineTest {
         check(s[0].startsWith("✈️ 11/12(목) 여행 가격 · "), "title " + s[0]);
         eq(s[1].split("\n").length, 3, "summary lines");
         if (args.length > 1) Files.write(Paths.get(args[1]), r2.put("at", 1762956000000L).put("demo", true).toString().getBytes("UTF-8"));
+
+        serpApiTests();
 
         if (failures > 0) {
             System.out.println(failures + " failures");
