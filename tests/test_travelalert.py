@@ -306,9 +306,28 @@ class SerpApiClientTest(unittest.TestCase):
         # 서버가 꺼짐 = 인터넷 끊김: 3번 시도 후 실패, 그다음은 바로 건너뜀
         off = SerpApiClient("k", base_url=url, retry_delay=0)
         t.destination = "DAD"
-        with self.assertRaisesRegex(RuntimeError, "인터넷 연결"):
-            off.flights(t, d, e)
+        for _ in range(3):
+            with self.assertRaisesRegex(RuntimeError, "인터넷 연결"):
+                off.flights(t, d, e)
+            # 한 번 실패로는 포기하지 않고, 연속 3번 실패해야 남은 검색을 건너뜀
         self.assertTrue(off.offline)
+
+    def test_network_blip_does_not_skip_other_dates(self):
+        from travelalert.prices import NetworkError
+
+        class Blip(GridClient):
+            fails = 2
+
+            def flights(self, *a):
+                if self.fails:
+                    self.fails -= 1
+                    raise NetworkError("끊김")
+                return super().flights(*a)
+
+        r = search_trip(Blip(), trip(max_searches=0, hotel=False), TODAY, {})
+        self.assertEqual(r.searched, 10)
+        self.assertEqual(len(r.errors), 1)
+        self.assertIn("2개", r.errors[0])
 
     def test_offline_errors_do_not_mark_combo_checked(self):
         class Off:

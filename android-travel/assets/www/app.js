@@ -112,6 +112,11 @@ function renderHome() {
   const msgs = [];
   if (!state.hasKey) msgs.push('체험 모드예요. 지금 보이는 가격은 가짜예요. [설정]에서 SerpApi 키를 넣어 주세요.');
   if (state.lastError) msgs.push('최근 검색 실패: ' + state.lastError);
+  if (last && last.networkMissed > 0) {
+    msgs.push(`인터넷 연결 문제로 날짜 ${last.networkMissed}개를 못 봤어요. `
+      + (last.retryScheduled ? '잠시 뒤(인터넷 연결 시) 자동으로 그 날짜만 다시 검색해요. ' : '')
+      + '자주 그러면 [설정]에서 배터리·백그라운드 데이터 제한을 풀어 주세요.');
+  }
   banner.innerHTML = msgs.map(esc).join('<br>');
   banner.classList.toggle('hidden', !msgs.length);
 
@@ -160,7 +165,10 @@ function tripCard(t, i) {
   }
   if (t.hotelWanted && f) {
     const hs = t.hotels || [];
-    if (!hs.length) h += `<div class="part"><div class="info">🏨 ${esc(f.outbound)}~${esc(f.inbound)} ${esc(t.hotelCity || '')} 힐튼 계열 호텔 빈방/가격 결과가 없어요</div></div>`;
+    if (!hs.length) {
+      h += `<div class="part"><div class="info">🏨 ${esc(f.outbound)}~${esc(f.inbound)} ${esc(t.hotelCity || '')} 힐튼 계열 호텔 빈방/가격 결과가 없어요`
+        + (t.hotelNote ? `<br><span class="small">(${esc(t.hotelNote)} · 호텔 검색 도시 이름이 영어인지 확인해 주세요)</span>` : '') + '</div></div>';
+    }
     hs.forEach((x, j) => {
       h += `<div class="part"><div class="head"><span>${j ? '' : '🏨 '}${esc(x.name)}</span><span class="price">${money(x.total)} ${j ? '' : delta(t.hotelDelta)}</span></div>
         <div class="info">1박 ${money(x.perNight)}${x.rating ? ` · ⭐ ${x.rating}` : ''}</div></div>`;
@@ -370,6 +378,9 @@ function renderSettings() {
   $('#key-hint').textContent = state.hasKey ? `저장된 키: ${state.keyHint}` : '키 없음 · 체험 모드';
   $('#clear-key').classList.toggle('hidden', !state.hasKey);
   f.alarmOn.checked = state.alarmOn;
+  const unrestricted = T.batteryUnrestricted ? T.batteryUnrestricted() : null;
+  $('#battery-state').textContent = unrestricted === null ? ''
+    : unrestricted ? '✅ 배터리 최적화: 꺼짐 (좋아요)' : '⚠️ 배터리 최적화: 켜짐 → ①을 눌러 꺼 주세요';
   f.time.value = `${String(state.hour).padStart(2, '0')}:${String(state.minute).padStart(2, '0')}`;
   f.origin.value = config.origin;
   f.currency.value = config.currency;
@@ -394,6 +405,7 @@ $('#settings-form').addEventListener('submit', (e) => {
 });
 $('#clear-key').onclick = () => { saveSettings(''); toast('키를 지웠어요 (체험 모드)'); renderSettings(); };
 $('#battery').onclick = () => T.openBatterySettings();
+$('#app-settings').onclick = () => T.openAppSettings && T.openAppSettings();
 $('#test-notify').onclick = () => {
   if (startSearch(true)) toast('검색 중… 끝나면 알림이 와요');
 };

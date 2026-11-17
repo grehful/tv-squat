@@ -23,7 +23,8 @@ final class Engine {
         List<Prices.Flight> flights = new ArrayList<>(); // 날짜 조합별 최저가, 싼 순
         List<Prices.Hotel> hotels = new ArrayList<>();
         List<String> errors = new ArrayList<>();
-        int searched, checkedCombos, totalCombos, emptyCombos;
+        int searched, checkedCombos, totalCombos, emptyCombos, networkMissed;
+        String hotelNote; // 호텔 결과가 없을 때 이유 (검색된 숙소 수)
 
         Prices.Flight best() { return flights.isEmpty() ? null : flights.get(0); }
 
@@ -37,18 +38,45 @@ final class Engine {
         }
     }
 
+    static final int PARALLEL = 3; // 동시에 검색하는 날짜 수 (전체 시간을 줄여 휴대폰이 잠들기 전에 끝내려고)
+
     /**
      * 여행 하나 검색. cache 는 이 여행의 조합별 최근 확인 결과({조합키: 항공 JSON 또는 {none, checked}})이며
      * 오늘 검색한 조합이 갱신된다. 결과는 기간 안 모든 조합 중 지금까지 확인한 최저가 순.
+     * resume 이면 오늘 쓰고 남은 검색 횟수만큼, 오늘 아직 못 본 조합만 검색한다 (인터넷 문제로 놓친 것 다시 검색).
      */
     static TripResult search(Prices.Client client, Trip trip, int today, JSONObject cache) throws JSONException {
+        return search(client, trip, today, cache, false);
+    }
+
+    static TripResult search(final Prices.Client client, final Trip trip, int today, JSONObject cache, boolean resume)
+            throws JSONException {
         TripResult r = new TripResult();
         r.trip = trip;
         List<int[]> combos = trip.allCombos(today);
-        for (int[] d : trip.pickToday(today, cache)) {
+        int usedToday = cache.optInt("_day", -1) == today ? cache.optInt("_used", 0) : 0;
+        int budget = trip.maxSearches <= 0 ? Integer.MAX_VALUE : trip.maxSearches - (resume ? usedToday : 0);
+        List<int[]> picks = trip.pickToday(today, cache, budget, resume);
+
+        // 여러 날짜를 동시에 검색
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(PARALLEL);
+        List<java.util.concurrent.Future<JSONObject>> futures = new ArrayList<>();
+        for (final int[] d : picks) {
+            futures.add(pool.submit(new java.util.concurrent.Callable<JSONObject>() {
+                @Override
+                public JSONObject call() throws Exception {
+                    return client.flights(trip, d[0], d[1]);
+                }
+            }));
+        }
+        pool.shutdown();
+        int networkFailed = 0;
+        for (int i = 0; i < picks.size(); i++) {
+            int[] d = picks.get(i);
             String key = Trip.comboKey(d);
             try {
-                List<Prices.Flight> fl = Prices.parseFlights(client.flights(trip, d[0], d[1]), d[0], d[1]);
+                if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
+                List<Prices.Flight> fl = Prices.parseFlights(futures.get(i).get(), d[0], d[1]);
                 r.searched++;
                 if (fl.isEmpty()) {
                     cache.put(key, new JSONObject().put("none", true).put("checked", today));
@@ -56,10 +84,25 @@ final class Engine {
                     fl.get(0).checked = today;
                     cache.put(key, fl.get(0).toJson());
                 }
-            } catch (Exception e) {
-                r.errors.add("항공 " + Day.label(d[0]) + " " + (d[1] - d[0]) + "박: " + message(e));
+            } catch (InterruptedException e) {
+                pool.shutdownNow(); // 휴대폰이 작업을 멈춤 → 남은 건 다음에 이어서
+                Thread.currentThread().interrupt();
+                networkFailed += picks.size() - i;
+                break;
+            } catch (java.util.concurrent.ExecutionException e) {
+                Throwable c = e.getCause();
+                if (c instanceof Prices.NetworkError) {
+                    networkFailed++;
+                } else {
+                    r.errors.add("항공 " + Day.label(d[0]) + " " + (d[1] - d[0]) + "박: " + message(c));
+                }
             }
         }
+        if (networkFailed > 0) {
+            r.networkMissed = networkFailed;
+            r.errors.add("인터넷 연결 문제로 날짜 조합 " + networkFailed + "개를 확인하지 못했어요");
+        }
+        cache.put("_day", today).put("_used", usedToday + r.searched);
         // 기간에서 빠진(지난) 조합은 지우고, 확인된 가격을 모은다
         JSONObject keep = new JSONObject();
         for (int[] d : combos) {
@@ -77,15 +120,32 @@ final class Engine {
             String k = it.next();
             if (!keep.has(k)) drop.add(k);
         }
-        for (String k : drop) cache.remove(k);
+        for (String k : drop) if (!k.startsWith("_")) cache.remove(k);
         r.totalCombos = combos.size();
         Collections.sort(r.flights, Prices.BY_PRICE);
 
         Prices.Flight best = r.best();
-        if (trip.hotel && best != null) {
+        JSONObject saved = cache.optJSONObject("_hotel");
+        String bestKey = best == null ? null : Trip.comboKey(new int[]{best.outbound, best.inbound});
+        if (trip.hotel && best != null && saved != null && saved.optInt("day") == today
+                && bestKey.equals(saved.optString("key"))) {
+            // 오늘 같은 날짜로 이미 찾은 호텔 결과는 다시 검색하지 않음 (검색 횟수 아끼기)
+            JSONArray hs = saved.optJSONArray("hotels");
+            for (int i = 0; hs != null && i < hs.length(); i++) r.hotels.add(Prices.Hotel.fromJson(hs.getJSONObject(i)));
+            r.hotelNote = saved.isNull("note") ? null : saved.optString("note", null);
+        } else if (trip.hotel && best != null) {
             try {
-                r.hotels = Prices.parseHotels(client.hotels(trip, best.outbound, best.inbound),
-                        best.inbound - best.outbound, trip.rooms);
+                JSONObject hj = client.hotels(trip, best.outbound, best.inbound);
+                r.hotels = Prices.parseHotels(hj, best.inbound - best.outbound, trip.rooms);
+                if (r.hotels.isEmpty()) {
+                    int seen = hj.optInt(Prices.SEEN, Prices.propertyCount(hj));
+                    r.hotelNote = seen == 0 ? "구글 호텔 검색 결과가 비어 있어요"
+                            : "검색된 숙소 " + seen + "곳 중 힐튼 계열이 없어요";
+                }
+                JSONArray hs = new JSONArray();
+                for (Prices.Hotel h : r.hotels) hs.put(h.toJson());
+                cache.put("_hotel", new JSONObject().put("day", today).put("key", bestKey).put("hotels", hs)
+                        .put("note", r.hotelNote == null ? JSONObject.NULL : r.hotelNote));
             } catch (Exception e) {
                 r.errors.add("호텔: " + message(e));
             }
@@ -94,7 +154,7 @@ final class Engine {
         return r;
     }
 
-    private static String message(Exception e) {
+    private static String message(Throwable e) {
         String m = e.getMessage();
         return m == null || m.isEmpty() ? e.getClass().getSimpleName() : m;
     }
@@ -102,12 +162,17 @@ final class Engine {
     /** 결과 JSON. history 는 {날짜: {여행키: {flight, hotel, total}}} 이며 오늘 값이 추가된다. */
     static JSONObject run(Prices.Client client, List<Trip> trips, int today, JSONObject history, JSONObject combos)
             throws JSONException {
+        return run(client, trips, today, history, combos, false);
+    }
+
+    static JSONObject run(Prices.Client client, List<Trip> trips, int today, JSONObject history, JSONObject combos,
+                          boolean resume) throws JSONException {
         List<TripResult> results = new ArrayList<>();
         JSONObject keepCombos = new JSONObject();
         for (Trip t : trips) {
             JSONObject cache = combos.optJSONObject(t.key());
             if (cache == null) cache = new JSONObject();
-            results.add(search(client, t, today, cache));
+            results.add(search(client, t, today, cache, resume));
             keepCombos.put(t.key(), cache);
         }
         // 지운/바꾼 여행의 기록은 정리
@@ -149,6 +214,9 @@ final class Engine {
         out.put("date", Day.iso(today));
         out.put("dateLabel", Day.label(today));
         out.put("calls", client.calls());
+        int missed = 0;
+        for (TripResult r : results) missed += r.networkMissed;
+        out.put("networkMissed", missed);
         out.put("trips", arr);
         return out;
     }
@@ -188,6 +256,7 @@ final class Engine {
         o.put("combosChecked", r.checkedCombos);
         o.put("combosTotal", r.totalCombos);
         o.put("combosEmpty", r.emptyCombos);
+        if (r.hotelNote != null) o.put("hotelNote", r.hotelNote);
         o.put("searchedToday", r.searched);
         Prices.Flight f = r.best();
         if (f != null) {
@@ -285,6 +354,10 @@ final class Engine {
             }
         }
         if (body.length() == 0) body.append("설정된 여행이 없어요. 앱에서 여행을 추가해 주세요.");
+        if (result.optInt("networkMissed") > 0) {
+            body.append("\n⚠️ 인터넷 문제로 날짜 ").append(result.optInt("networkMissed")).append("개를 못 봤어요. ")
+                    .append(result.optBoolean("retryScheduled") ? "잠시 뒤 자동으로 다시 확인해요" : "다음 검색 때 다시 확인해요");
+        }
         return new String[]{title, body.toString()};
     }
 }

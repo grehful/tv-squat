@@ -12,7 +12,7 @@ final class DemoClient implements Prices.Client {
     DemoClient(int today) { this.today = today; }
 
     @Override
-    public int calls() { return calls; }
+    public synchronized int calls() { return calls; }
 
     private static int n(Object... parts) {
         int h = 17;
@@ -23,7 +23,7 @@ final class DemoClient implements Prices.Client {
 
     @Override
     public JSONObject flights(Trip t, int outbound, int inbound) throws JSONException {
-        calls++;
+        synchronized (this) { calls++; }
         int people = t.adults + t.childAges.length;
         int base = 250_000 + n(t.destination) % 900_000;
         String[] airlines = t.airlines.length > 0 ? t.airlines : new String[]{"대한항공", "아시아나항공", "제주항공"};
@@ -44,7 +44,7 @@ final class DemoClient implements Prices.Client {
 
     @Override
     public JSONObject hotels(Trip t, int checkIn, int checkOut) throws JSONException {
-        calls++;
+        synchronized (this) { calls++; }
         int nights = checkOut - checkIn;
         JSONArray props = new JSONArray();
         for (String brand : new String[]{"Hilton", "Conrad", "DoubleTree by Hilton", "Hampton by Hilton"}) {

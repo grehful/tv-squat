@@ -35,6 +35,42 @@ public class EngineTest {
 
     static int failures;
 
+    static int comboCount(JSONObject cache) {
+        int n = 0;
+        java.util.Iterator<String> it = cache.keys();
+        while (it.hasNext()) if (!it.next().startsWith("_")) n++;
+        return n;
+    }
+
+    /** 처음 몇 번은 인터넷 끊김, 그다음부터는 정상인 가짜 검색. */
+    static final class FlakyClient implements Prices.Client {
+        int failFirst, calls;
+        final java.util.List<String> keys = new java.util.ArrayList<>();
+
+        FlakyClient(int failFirst) { this.failFirst = failFirst; }
+
+        public synchronized int calls() { return calls; }
+
+        public JSONObject flights(Trip t, int out, int in) throws Exception {
+            synchronized (this) {
+                if (failFirst > 0) {
+                    failFirst--;
+                    throw new Prices.NetworkError("인터넷 연결이 끊겨 serpapi.com 에 접속하지 못했어요", null);
+                }
+                calls++;
+                keys.add(Trip.comboKey(new int[]{out, in}));
+            }
+            return new JSONObject().put("best_flights", new JSONArray().put(new JSONObject().put("price", 400000 + (in - out) * 1000 + out % 10)
+                    .put("flights", new JSONArray().put(new JSONObject().put("airline", "ZE")))));
+        }
+
+        public synchronized JSONObject hotels(Trip t, int a, int b) throws Exception {
+            calls++;
+            return new JSONObject().put("properties", new JSONArray().put(new JSONObject().put("name", "Hilton Bangkok")
+                    .put("rate_per_night", new JSONObject().put("extracted_lowest", 200000)))).put(Prices.SEEN, 1);
+        }
+    }
+
     static void check(boolean ok, String what) {
         if (!ok) {
             failures++;
@@ -44,6 +80,56 @@ public class EngineTest {
 
     static void eq(Object a, Object b, String what) {
         check(String.valueOf(a).equals(String.valueOf(b)), what + " (" + a + " != " + b + ")");
+    }
+
+    /** 스크린샷의 상황: 아침 검색 도중 인터넷이 잠깐 끊김. */
+    static void networkTests(JSONObject root) throws Exception {
+        int today = Day.parse("2026-11-18");
+        Trip bkk = Trip.parseAll(root).get(2); // 방콕 3/1~3/10, 4·5박 = 20개
+        bkk.maxSearches = 6;
+        JSONObject cache = new JSONObject();
+        FlakyClient c = new FlakyClient(2);
+        Engine.TripResult r = Engine.search(c, bkk, today, cache);
+        eq(r.searched, 4, "other combos still searched after a blip");
+        eq(r.networkMissed, 2, "missed counted");
+        eq(r.errors.size(), 1, "network errors grouped into one line " + r.errors);
+        check(r.errors.get(0).contains("2개"), "grouped message " + r.errors);
+        eq(cache.optInt("_used"), 4, "used today");
+        eq(r.hotels.size(), 1, "hotel searched");
+        // 다시 검색(resume): 남은 2회만, 오늘 안 본 조합만, 호텔은 최저가 날짜가 같으면 다시 안 찾음
+        c.keys.clear();
+        int callsBefore = c.calls();
+        r = Engine.search(c, bkk, today, cache, true);
+        eq(r.searched, 2, "resume uses remaining budget");
+        eq(r.networkMissed, 0, "resume ok");
+        eq(cache.optInt("_used"), 6, "used after resume");
+        eq(r.checkedCombos, 6, "6 combos known");
+        // 이미 6회 다 썼으면 resume 은 아무것도 안 함
+        r = Engine.search(c, bkk, today, cache, true);
+        eq(r.searched, 0, "no budget left");
+        // 다음 날은 다시 6회
+        r = Engine.search(c, bkk, today + 1, cache, true);
+        eq(r.searched, 6, "budget resets next day");
+        // 같은 날짜 호텔 결과는 재사용
+        int before = c.calls();
+        Engine.search(c, bkk, today + 1, cache, true);
+        eq(c.calls() - before, 0, "hotel reused, nothing to search");
+
+        // '매일 전부' 모드 resume: 오늘 못 본 조합만
+        Trip all = Trip.parseAll(root).get(1); // 오사카 8개
+        all.maxSearches = 0;
+        JSONObject ac = new JSONObject();
+        FlakyClient f2 = new FlakyClient(3);
+        r = Engine.search(f2, all, today, ac);
+        eq(r.searched + r.networkMissed, 8, "all mode attempts all");
+        r = Engine.search(f2, all, today, ac, true);
+        eq(r.searched, 3, "all mode resume only missed");
+        eq(r.checkedCombos, 8, "all mode complete after resume");
+
+        // 전체 결과 JSON 에 놓친 개수
+        JSONObject res = Engine.run(new FlakyClient(1), Trip.parseAll(root), today, new JSONObject(), new JSONObject());
+        eq(res.getInt("networkMissed"), 1, "result networkMissed");
+        check(Engine.summary(res)[1].contains("못 봤어요"), "summary mentions missed");
     }
 
     /** PC 안에 가짜 SerpApi 서버를 띄워서 실제 HTTP 호출 경로를 시험. */
@@ -61,6 +147,8 @@ public class EngineTest {
                 } else if (q.contains("arrival_id=BAD")) {
                     body = "{\"error\":\"Invalid API key.\"}";
                     code = 401;
+                } else if (q.contains("brands=999")) {
+                    body = "{\"error\":\"Google Hotels hasn't returned any results for this query.\"}";
                 } else if (q.contains("brands=")) {
                     body = "{\"properties\":[{\"name\":\"The Curio Place\",\"rate_per_night\":{\"extracted_lowest\":150000}},"
                             + "{\"name\":\"Hilton Danang\",\"rate_per_night\":{\"extracted_lowest\":180000}}]}";
@@ -112,6 +200,16 @@ public class EngineTest {
             before = queries.size();
             api.hotels(t, d, d + 5);
             eq(queries.size() - before, 1, "known brands = 1 call");
+            // 저장된 브랜드 id 로 아무것도 안 나오면 이름 검색으로 확인하고, 브랜드 필터를 그만 씀
+            api.hiltonBrands = "999";
+            before = queries.size();
+            hs = Prices.parseHotels(api.hotels(t, d, d + 5), 5, 1);
+            eq(hs.size(), 1, "fallback to name search");
+            eq(api.hiltonBrands, Prices.NO_BRAND_FILTER, "brand filter disabled");
+            before = queries.size();
+            api.hotels(t, d, d + 5);
+            eq(queries.size() - before, 1, "name-only = 1 call");
+            check(!queries.get(queries.size() - 1).contains("brands="), "no brand param");
         } finally {
             server.stop(0);
         }
@@ -126,13 +224,21 @@ public class EngineTest {
         } catch (java.io.IOException e) {
             check(e.getMessage().contains("인터넷 연결"), "friendly offline message " + e.getMessage());
         }
+        // 한 번 실패로는 포기하지 않음: 연속 3번(각각 다시 시도까지) 실패해야 남은 검색을 바로 건너뜀
+        for (int k = 0; k < 2; k++) {
+            try {
+                off.flights(t, d, d + 6);
+            } catch (java.io.IOException expected) {
+            }
+        }
         long start = System.currentTimeMillis();
         off.retryDelayMs = 5000;
         try {
-            off.flights(t, d, d + 6);
+            off.flights(t, d, d + 7);
         } catch (java.io.IOException expected) {
+            check(expected instanceof Prices.NetworkError, "network error type");
         }
-        check(System.currentTimeMillis() - start < 3000, "fail fast once offline");
+        check(System.currentTimeMillis() - start < 3000, "fail fast after 3 consecutive network failures");
         // 호텔 응답이 1곳 상세로 올 때
         eq(Prices.parseHotels(new JSONObject("{\"name\":\"Conrad Osaka\",\"rate_per_night\":{\"extracted_lowest\":300000}}"), 2, 1).size(), 1, "single property");
         eq(Prices.hiltonBrandIds(new JSONObject("{\"brands\":[{\"id\":1,\"name\":\"Accor\"}]}")), null, "no hilton brand");
@@ -195,7 +301,7 @@ public class EngineTest {
         eq(Day.iso(tr.best().outbound), "2027-01-21", "best when all");
         // 기간이 줄면 지난 조합은 지워진다
         Engine.search(grid, tokyo, Day.parse("2027-01-24"), cache);
-        eq(cache.length(), 2, "cache pruned");
+        eq(comboCount(cache), 2, "cache pruned");
 
         // 잘못된 설정
         String[] bad = {
@@ -273,6 +379,7 @@ public class EngineTest {
         if (args.length > 1) Files.write(Paths.get(args[1]), r2.put("at", 1762956000000L).put("demo", true).toString().getBytes("UTF-8"));
 
         serpApiTests();
+        networkTests(root);
 
         if (failures > 0) {
             System.out.println(failures + " failures");

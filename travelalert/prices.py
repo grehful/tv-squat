@@ -64,6 +64,13 @@ class ApiError(RuntimeError):
     """SerpApi 가 돌려준 오류 (인터넷 문제가 아니므로 다시 시도하지 않음)."""
 
 
+class NetworkError(RuntimeError):
+    """인터넷 문제로 실패 (다시 시도하면 될 수 있음)."""
+
+
+NO_BRAND_FILTER = "none"  # 브랜드 필터가 안 먹혀서 이름으로만 찾는다
+
+
 def hilton_brand_ids(data: dict) -> str | None:
     """Google Hotels 응답의 brands 목록에서 힐튼 계열 브랜드 id 들 ("1,2,3")."""
     ids: list[str] = []
@@ -91,25 +98,30 @@ class SerpApiClient:
         self.hilton_brands = hilton_brands  # 한 번 찾으면 기록에 저장해 두고 계속 씀
         self.base_url = base_url
         self.retry_delay = retry_delay
-        self.offline = False  # 인터넷이 끊긴 게 확인되면 남은 검색은 기다리지 않고 건너뜀
+        # 여러 검색이 연달아(각각 다시 시도까지 해도) 실패하면 정말 끊긴 것으로 보고 남은 검색은 바로 건너뜀
+        self.consecutive_failures = 0
+
+    @property
+    def offline(self) -> bool:
+        return self.consecutive_failures >= 3
 
     def _get(self, params: dict) -> dict:
         """인터넷이 잠깐 끊긴 경우는 조금 기다렸다가 두 번 더 시도한다."""
         last = None
         for attempt in range(1 if self.offline else 3):
             if attempt:
-                time.sleep(self.retry_delay * attempt)
+                time.sleep(self.retry_delay * (1 if attempt == 1 else 3))
             try:
                 data = self._get_once(params)
-                self.offline = False
+                self.consecutive_failures = 0
                 return data
             except ApiError:
-                self.offline = False
+                self.consecutive_failures = 0
                 raise
             except (OSError, ValueError) as e:  # URLError, 시간 초과, 깨진 응답
                 last = e
-        self.offline = True
-        raise RuntimeError(f"인터넷 연결 문제로 SerpApi 에 접속하지 못했어요 (다음 검색 때 다시 확인): {last}")
+        self.consecutive_failures += 1
+        raise NetworkError(f"인터넷 연결 문제로 SerpApi 에 접속하지 못했어요 (다음 검색 때 다시 확인): {last}")
 
     def _get_once(self, params: dict) -> dict:
         params = {**params, "api_key": self.api_key, "currency": self.currency}
@@ -171,11 +183,20 @@ class SerpApiClient:
         if t.children and trip.rooms == 1:
             p["children"] = t.children
             p["children_ages"] = ",".join(str(a) for a in t.children_ages)
-        if self.hilton_brands:
-            return self._brand_search(p, trip)
+        brands = self.hilton_brands
+        if brands and brands != NO_BRAND_FILTER:
+            by_brand = self._brand_search(p, trip)
+            if parse_hotels(by_brand, 1):
+                return by_brand
+            by_name = self._get({**p, "q": f"Hilton hotels in {trip.hotel_city}"})
+            if parse_hotels(by_name, 1):
+                self.hilton_brands = NO_BRAND_FILTER  # 브랜드 필터가 안 먹힘 → 이름으로만
+            return by_name
         # 브랜드 id 를 아직 모르면 관련도순으로 검색 (최저가순이면 싼 일반 숙소가 첫 페이지를 채워 힐튼이 빠짐)
         # → 응답의 brands 목록에서 힐튼 id 를 찾아 힐튼 계열만 최저가순으로 다시 검색
         first = self._get(p)
+        if brands:  # "none"
+            return first
         ids = hilton_brand_ids(first)
         if not ids:
             return first
@@ -184,7 +205,11 @@ class SerpApiClient:
             by_brand = self._brand_search(p, trip)
         except (RuntimeError, OSError):
             return first
-        return by_brand if parse_hotels(by_brand, 1) else first
+        if parse_hotels(by_brand, 1):
+            return by_brand
+        if parse_hotels(first, 1):
+            self.hilton_brands = NO_BRAND_FILTER
+        return first
 
     def _brand_search(self, p: dict, trip: Trip) -> dict:
         p = {**p, "q": f"hotels in {trip.hotel_city}", "brands": self.hilton_brands, "sort_by": 3}
@@ -307,15 +332,21 @@ def search_trip(client, trip: Trip, today: date, cache: dict | None = None) -> T
     cache = {} if cache is None else cache
     res = TripResult(trip)
     combos = trip.all_combos(today)
+    missed = 0
     for outbound, inbound in trip.pick_today(today, cache):
         key = combo_key((outbound, inbound))
         try:
             flights = parse_flights(client.flights(trip, outbound, inbound), outbound, inbound)
+        except NetworkError:
+            missed += 1
+            continue
         except Exception as e:  # noqa: BLE001 - 한 날짜 실패해도 나머지는 계속
             res.errors.append(f"항공 {outbound.month}/{outbound.day} {(inbound - outbound).days}박: {e}")
             continue
         res.searched += 1
         cache[key] = flight_to_cache(flights[0], today) if flights else {"none": True, "checked": today.isoformat()}
+    if missed:
+        res.errors.append(f"인터넷 연결 문제로 날짜 조합 {missed}개를 확인하지 못했어요 (다음 검색 때 다시 확인)")
     valid = {combo_key(c): c for c in combos}
     for k in list(cache):
         if k not in valid:

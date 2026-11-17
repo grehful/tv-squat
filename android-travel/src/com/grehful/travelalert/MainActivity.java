@@ -158,13 +158,36 @@ public class MainActivity extends Activity {
             if (url.startsWith("https://")) openExternal(url);
         }
 
+        /** "배터리 사용량 최적화 중지" 허용 창을 띄운다 (안 되면 설정 목록). */
         @JavascriptInterface
         public void openBatterySettings() {
             try {
-                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (Exception e) {
+                try {
+                    startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                } catch (Exception e2) {
+                    startActivity(new Intent(Settings.ACTION_SETTINGS));
+                }
+            }
+        }
+
+        /** 이 앱의 '앱 정보' 화면 (모바일 데이터 → 백그라운드 데이터 허용, 배터리 → 제한 없음). */
+        @JavascriptInterface
+        public void openAppSettings() {
+            try {
+                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:" + getPackageName())));
             } catch (Exception e) {
                 startActivity(new Intent(Settings.ACTION_SETTINGS));
             }
+        }
+
+        @JavascriptInterface
+        public boolean batteryUnrestricted() {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            return pm.isIgnoringBatteryOptimizations(getPackageName());
         }
     }
 }

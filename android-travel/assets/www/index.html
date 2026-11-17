@@ -113,8 +113,11 @@
       <h3>아침 알림</h3>
       <label class="check"><input type="checkbox" name="alarmOn"> 매일 알림 받기</label>
       <label>알림 시각 <input type="time" name="time" value="07:00"></label>
-      <p class="muted small">폰 상태에 따라 몇 분 늦게 올 수 있어요. 알림이 안 오면 아래에서 배터리 최적화를 꺼 주세요.</p>
-      <button type="button" id="battery">배터리 최적화 설정 열기</button>
+      <p class="muted small">휴대폰이 잠든 아침에 검색하므로, 안드로이드가 이 앱의 인터넷을 막지 않게 아래 두 가지를 해 주세요.
+        안 하면 "인터넷 연결이 끊겨…" 오류가 나거나 알림이 늦을 수 있어요.</p>
+      <div id="battery-state" class="muted small"></div>
+      <button type="button" id="battery" class="wide">① 배터리 최적화 끄기 (허용 누르기)</button>
+      <button type="button" id="app-settings" class="wide">② 앱 정보 열기 → 모바일 데이터 → '백그라운드 데이터 사용' 켜기</button>
 
       <h3>기본값</h3>
       <div class="grid2">

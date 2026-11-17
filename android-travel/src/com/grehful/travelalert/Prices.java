@@ -89,6 +89,23 @@ final class Prices {
         String name, link, hotelClass;
         int total, perNight;
         double rating;
+
+        JSONObject toJson() throws JSONException {
+            return new JSONObject().put("name", name).put("total", total).put("perNight", perNight)
+                    .put("rating", rating).put("link", link == null ? JSONObject.NULL : link)
+                    .put("hotelClass", hotelClass == null ? JSONObject.NULL : hotelClass);
+        }
+
+        static Hotel fromJson(JSONObject o) {
+            Hotel h = new Hotel();
+            h.name = o.optString("name");
+            h.total = o.optInt("total");
+            h.perNight = o.optInt("perNight");
+            h.rating = o.optDouble("rating", 0);
+            h.link = o.isNull("link") ? null : o.optString("link", null);
+            h.hotelClass = o.isNull("hotelClass") ? null : o.optString("hotelClass", null);
+            return h;
+        }
     }
 
     static List<Flight> parseFlights(JSONObject data, int outbound, int inbound) {
@@ -191,14 +208,31 @@ final class Prices {
         ApiError(String m) { super(m); }
     }
 
+    /** 인터넷 문제로 실패 (다시 시도하면 될 수 있음). */
+    static final class NetworkError extends IOException {
+        NetworkError(String m, Throwable cause) { super(m, cause); }
+    }
+
+    /** hiltonBrands 에 저장하는 값: 브랜드 필터가 안 먹혀서 이름으로만 찾는다. */
+    static final String NO_BRAND_FILTER = "none";
+    /** 호텔 응답에 붙이는 진단 정보: 검색된 숙소 수. */
+    static final String SEEN = "_seen";
+
+    static int propertyCount(JSONObject data) {
+        JSONArray props = data.optJSONArray("properties");
+        return props != null ? props.length() : (data.has("name") ? 1 : 0);
+    }
+
     /** 실제 SerpApi 호출. */
     static final class SerpApi implements Client {
         private final String apiKey, currency;
         private int calls;
-        String hiltonBrands; // 한 번 찾으면 저장해 두고 계속 씀 (Runner 가 보관)
+        volatile String hiltonBrands; // 한 번 찾으면 저장해 두고 계속 씀 (Runner 가 보관), "none" = 이름으로만
         long retryDelayMs = 4000;
         String baseUrl = "https://serpapi.com/search.json"; // 테스트에서 바꿈
-        private boolean offline; // 인터넷이 끊긴 게 확인되면 남은 검색은 기다리지 않고 바로 건너뜀
+        // 여러 검색이 연달아 (각각 다시 시도까지 해도) 실패하면 정말 끊긴 것으로 보고 남은 검색은 바로 건너뜀
+        private int consecutiveFailures;
+        static final int OFFLINE_AFTER = 3;
 
         SerpApi(String apiKey, String currency, String hiltonBrands) {
             this.apiKey = apiKey;
@@ -207,7 +241,15 @@ final class Prices {
         }
 
         @Override
-        public int calls() { return calls; }
+        public synchronized int calls() { return calls; }
+
+        private synchronized void counted() { calls++; }
+
+        private synchronized boolean offline() { return consecutiveFailures >= OFFLINE_AFTER; }
+
+        private synchronized void result(boolean ok) {
+            consecutiveFailures = ok ? 0 : consecutiveFailures + 1;
+        }
 
         @Override
         public JSONObject flights(Trip t, int outbound, int inbound) throws Exception {
@@ -245,54 +287,74 @@ final class Prices {
             }
             p.put("hl", "en");
             p.put("gl", "kr");
-            if (hiltonBrands != null) return brandSearch(p, t);
+            String brands = hiltonBrands;
+            if (brands != null && !NO_BRAND_FILTER.equals(brands)) {
+                JSONObject byBrand = brandSearch(p, t, brands);
+                if (!parseHotels(byBrand, 1, 1).isEmpty()) return byBrand;
+                // 브랜드로 찾았는데 하나도 없으면 이름 검색으로 한 번 더 확인
+                JSONObject byName = relevanceSearch(p, t);
+                if (!parseHotels(byName, 1, 1).isEmpty()) hiltonBrands = NO_BRAND_FILTER; // 브랜드 필터가 안 먹힘
+                return byName.put(SEEN, Math.max(byName.optInt(SEEN), byBrand.optInt(SEEN)));
+            }
             // 브랜드 id 를 아직 모르면: 관련도순으로 "Hilton hotels in 도시" 검색 (최저가순으로 하면
             // 싼 일반 숙소가 첫 페이지를 채워 힐튼이 빠진다) → 응답의 brands 목록에서 힐튼 id 를 찾아 다시 검색
-            p.put("q", "Hilton hotels in " + t.hotelCity);
-            JSONObject first = get(p);
+            JSONObject first = relevanceSearch(p, t);
+            if (brands != null) return first; // "none": 이름으로만
             String ids = hiltonBrandIds(first);
             if (ids == null) return first;
             hiltonBrands = ids;
             try {
-                JSONObject byBrand = brandSearch(p, t);
-                return parseHotels(byBrand, 1, 1).isEmpty() ? first : byBrand;
+                JSONObject byBrand = brandSearch(p, t, ids);
+                if (!parseHotels(byBrand, 1, 1).isEmpty()) return byBrand;
+                if (!parseHotels(first, 1, 1).isEmpty()) hiltonBrands = NO_BRAND_FILTER;
+                return first;
             } catch (IOException e) {
                 return first;
             }
         }
 
-        private JSONObject brandSearch(Map<String, Object> p, Trip t) throws IOException, JSONException {
-            p.put("q", "hotels in " + t.hotelCity);
-            p.put("brands", hiltonBrands);
-            p.put("sort_by", 3); // 힐튼 계열 안에서 최저가순
-            return get(p).put(BRAND_FILTERED, true);
+        private JSONObject relevanceSearch(Map<String, Object> base, Trip t) throws IOException, JSONException {
+            Map<String, Object> p = new LinkedHashMap<>(base);
+            p.put("q", "Hilton hotels in " + t.hotelCity);
+            JSONObject r = get(p);
+            return r.put(SEEN, propertyCount(r));
         }
 
-        /** 인터넷이 잠깐 끊긴 경우(주소 못 찾음, 시간 초과 등)는 조금 기다렸다가 두 번 더 시도한다. */
+        private JSONObject brandSearch(Map<String, Object> base, Trip t, String brands) throws IOException, JSONException {
+            Map<String, Object> p = new LinkedHashMap<>(base);
+            p.put("q", "hotels in " + t.hotelCity);
+            p.put("brands", brands);
+            p.put("sort_by", 3); // 힐튼 계열 안에서 최저가순
+            JSONObject r = get(p);
+            return r.put(SEEN, propertyCount(r)).put(BRAND_FILTERED, true);
+        }
+
+        /** 인터넷이 잠깐 끊긴 경우(주소 못 찾음, 시간 초과 등)는 4초, 12초 기다렸다가 다시 시도한다. */
         private JSONObject get(Map<String, Object> params) throws IOException, JSONException {
             IOException last = null;
-            for (int attempt = 0; attempt < (offline ? 1 : 3); attempt++) {
+            int attempts = offline() ? 1 : 3;
+            for (int attempt = 0; attempt < attempts; attempt++) {
                 if (attempt > 0) {
                     try {
-                        Thread.sleep(retryDelayMs * attempt);
+                        Thread.sleep(retryDelayMs * (attempt == 1 ? 1 : 3));
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         break;
                     }
                 }
                 try {
-                    JSONObject r = getOnce(params);
-                    offline = false;
+                    JSONObject r = getOnce(new LinkedHashMap<>(params));
+                    result(true);
                     return r;
                 } catch (ApiError e) {
-                    offline = false;
+                    result(true);
                     throw e;
                 } catch (IOException e) {
                     last = e;
                 }
             }
-            offline = true;
-            throw new IOException(networkMessage(last), last);
+            result(false);
+            throw new NetworkError(networkMessage(last), last);
         }
 
         private JSONObject getOnce(Map<String, Object> params) throws IOException, JSONException {
@@ -308,7 +370,7 @@ final class Prices {
             c.setReadTimeout(90_000);
             try {
                 int code = c.getResponseCode();
-                calls++;
+                counted();
                 InputStream in = code < 400 ? c.getInputStream() : c.getErrorStream();
                 String body = in == null ? "" : read(in);
                 JSONObject json;
@@ -333,9 +395,9 @@ final class Prices {
 
     static String networkMessage(IOException e) {
         if (e instanceof java.net.UnknownHostException || e instanceof java.net.ConnectException) {
-            return "인터넷 연결이 끊겨 serpapi.com 에 접속하지 못했어요 (다음 검색 때 다시 확인)";
+            return "인터넷 연결이 끊겨 serpapi.com 에 접속하지 못했어요";
         }
-        if (e instanceof java.net.SocketTimeoutException) return "응답이 너무 늦어 건너뛰었어요 (다음 검색 때 다시 확인)";
+        if (e instanceof java.net.SocketTimeoutException) return "응답이 너무 늦어 건너뛰었어요";
         return e == null ? "인터넷 오류" : String.valueOf(e.getMessage());
     }
 

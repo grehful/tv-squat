@@ -68,8 +68,20 @@ final class Trip {
      * cache: {조합키: {price.., checked}} (확인 결과 기록)
      */
     List<int[]> pickToday(int today, org.json.JSONObject cache) {
-        final List<int[]> combos = allCombos(today);
-        if (maxSearches <= 0 || maxSearches >= combos.size()) return combos;
+        return pickToday(today, cache, maxSearches <= 0 ? Integer.MAX_VALUE : maxSearches, false);
+    }
+
+    /**
+     * budget: 검색할 최대 개수. resume 이면 이미 오늘 확인한 조합은 빼고 고른다
+     * (인터넷 문제로 놓친 조합을 나중에 다시 검색할 때).
+     */
+    List<int[]> pickToday(int today, org.json.JSONObject cache, int budget, boolean resume) {
+        List<int[]> all = allCombos(today);
+        final List<int[]> combos = new ArrayList<>();
+        for (int[] c : all) if (!resume || checked(cache, c) != today) combos.add(c);
+        if (budget <= 0) return new ArrayList<>();
+        if (budget >= combos.size()) return combos;
+        final int maxSearches = budget;
         List<int[]> order = new ArrayList<>();
         // 1) 지금까지 최저가 2개
         List<int[]> known = new ArrayList<>();

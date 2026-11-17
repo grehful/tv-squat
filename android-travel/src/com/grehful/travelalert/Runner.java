@@ -20,7 +20,10 @@ import java.util.Calendar;
 final class Runner {
     static final String PREFS = "travel";
     private static final String CHANNEL = "daily";
-    private static final int JOB_ID = 1;
+    static final int JOB_ID = 1;
+    static final int RETRY_JOB_ID = 2;
+    static final int MAX_RETRIES_PER_DAY = 4;
+    static final long RETRY_DELAY_MS = 10 * 60_000L;
     private static final int FLAG_IMMUTABLE = 0x04000000; // PendingIntent.FLAG_IMMUTABLE (API 23)
     private static volatile boolean running;
 
@@ -43,7 +46,12 @@ final class Runner {
     static boolean isRunning() { return running; }
 
     /** 검색하고 결과를 저장한다. 키가 없으면 체험 모드(가짜 가격, 기록 안 함). */
-    static synchronized JSONObject search(Context c) throws Exception {
+    static JSONObject search(Context c) throws Exception {
+        return search(c, false);
+    }
+
+    /** resume: 오늘 인터넷 문제로 놓친 날짜만 (남은 검색 횟수 안에서) 다시 검색. */
+    static synchronized JSONObject search(Context c, boolean resume) throws Exception {
         // 다른 곳(아침 작업/버튼)에서 이미 검색 중이면 기다렸다가 이어서 실행된다
         running = true;
         try {
@@ -58,7 +66,7 @@ final class Runner {
             JSONObject combos = demo ? new JSONObject() : new JSONObject(p.getString("combos", "{}"));
             java.util.List<Trip> trips = Trip.parseAll(root);
             if (demo) for (Trip t : trips) t.maxSearches = 0; // 체험 모드는 공짜라 매번 모든 조합
-            JSONObject result = Engine.run(client, trips, today, history, combos);
+            JSONObject result = Engine.run(client, trips, today, history, combos, resume && !demo);
             result.put("demo", demo);
             result.put("at", System.currentTimeMillis());
             SharedPreferences.Editor e = p.edit().putString("last", result.toString()).remove("lastError");
@@ -67,12 +75,36 @@ final class Runner {
                 e.putString("hiltonBrands", ((Prices.SerpApi) client).hiltonBrands);
             }
             e.apply();
+            if (!demo) scheduleRetryIfNeeded(c, result, today);
             return result;
         } catch (Exception | Error ex) {
             prefs(c).edit().putString("lastError", ex.getMessage() == null ? ex.toString() : ex.getMessage()).apply();
             throw ex;
         } finally {
             running = false;
+        }
+    }
+
+    /** 인터넷 문제로 놓친 날짜가 있으면 10분 뒤(인터넷 연결 시) 그 날짜만 다시 검색하도록 맡긴다. */
+    static void scheduleRetryIfNeeded(Context c, JSONObject result, int today) {
+        SharedPreferences p = prefs(c);
+        JobScheduler js = (JobScheduler) c.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+        if (result.optInt("networkMissed") == 0) {
+            js.cancel(RETRY_JOB_ID);
+            return;
+        }
+        int count = p.getInt("retryDay", -1) == today ? p.getInt("retryCount", 0) : 0;
+        if (count >= MAX_RETRIES_PER_DAY) return;
+        p.edit().putInt("retryDay", today).putInt("retryCount", count + 1).apply();
+        js.schedule(new JobInfo.Builder(RETRY_JOB_ID, new ComponentName(c, SearchJob.class))
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setMinimumLatency(RETRY_DELAY_MS * (count + 1))
+                .setOverrideDeadline(RETRY_DELAY_MS * (count + 1) + 3 * 3600_000L)
+                .build());
+        try {
+            result.put("retryScheduled", true);
+            p.edit().putString("last", result.toString()).apply();
+        } catch (org.json.JSONException ignored) {
         }
     }
 
@@ -125,8 +157,12 @@ final class Runner {
         }
     }
 
-    @SuppressWarnings("deprecation")
     static void notify(Context c, String title, String body) {
+        notify(c, title, body, false);
+    }
+
+    @SuppressWarnings("deprecation")
+    static void notify(Context c, String title, String body, boolean quiet) {
         NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
         ensureChannel(nm);
         Intent open = new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -137,7 +173,8 @@ final class Runner {
                 .setContentText(body.split("\n")[0])
                 .setStyle(new Notification.BigTextStyle().bigText(body))
                 .setContentIntent(pi)
-                .setAutoCancel(true);
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(quiet);
         try {
             Notification.Builder.class.getMethod("setChannelId", String.class).invoke(b, CHANNEL);
         } catch (ReflectiveOperationException ignored) {
