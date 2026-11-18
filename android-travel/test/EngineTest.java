@@ -20,9 +20,9 @@ public class EngineTest {
             this.cheapNights = cheapNights;
         }
 
-        public int calls() { return calls; }
+        public synchronized int calls() { return calls; }
 
-        public JSONObject flights(Trip t, int out, int in) throws Exception {
+        public synchronized JSONObject flights(Trip t, int out, int in) throws Exception { // 동시에 불림
             calls++;
             keys.add(Trip.comboKey(new int[]{out, in}));
             int price = (out == cheapDay && in - out == cheapNights) ? 500000 : 700000 + (out % 7) * 10000 + (in - out) * 1000;
