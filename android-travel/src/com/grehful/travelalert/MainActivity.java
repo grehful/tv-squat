@@ -153,6 +153,12 @@ public class MainActivity extends Activity {
             return true;
         }
 
+        /** 카카오톡으로 보내기 (카톡이 없으면 공유할 앱 고르기). */
+        @JavascriptInterface
+        public void share(String text) {
+            Runner.share(MainActivity.this, text);
+        }
+
         @JavascriptInterface
         public void openUrl(String url) {
             if (url.startsWith("https://")) openExternal(url);

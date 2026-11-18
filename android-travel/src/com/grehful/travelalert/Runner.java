@@ -157,6 +157,22 @@ final class Runner {
         }
     }
 
+    static final String KAKAO = "com.kakao.talk";
+
+    static Intent shareIntent(String text) {
+        return new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text);
+    }
+
+    /** 카카오톡 공유 화면을 바로 연다. 카톡이 없으면 공유할 앱 고르기 화면. */
+    static void share(Context c, String text) {
+        Intent kakao = shareIntent(text).setPackage(KAKAO).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            c.startActivity(kakao);
+        } catch (android.content.ActivityNotFoundException e) {
+            c.startActivity(Intent.createChooser(shareIntent(text), "공유하기").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        }
+    }
+
     static void notify(Context c, String title, String body) {
         notify(c, title, body, false);
     }
@@ -175,6 +191,10 @@ final class Runner {
                 .setContentIntent(pi)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(quiet);
+        // 알림에서 바로 카톡 공유 (공유할 앱 고르기 → 카카오톡)
+        Intent chooser = Intent.createChooser(shareIntent(title + "\n\n" + body), "공유하기");
+        PendingIntent sharePi = PendingIntent.getActivity(c, 2, chooser, PendingIntent.FLAG_UPDATE_CURRENT | FLAG_IMMUTABLE);
+        b.addAction(new Notification.Action.Builder(null, "💬 공유", sharePi).build());
         try {
             Notification.Builder.class.getMethod("setChannelId", String.class).invoke(b, CHANNEL);
         } catch (ReflectiveOperationException ignored) {

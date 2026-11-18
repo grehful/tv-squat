@@ -134,8 +134,45 @@ function renderHome() {
   $('#updated').textContent = `${at.getMonth() + 1}/${at.getDate()} ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')} 기준`
     + (last.demo ? ' · 체험 모드' : '') + ` · 검색 ${last.calls}회`;
   const trips = last.trips || [];
-  $('#results').innerHTML = trips.length ? trips.map(tripCard).join('')
+  $('#results').innerHTML = trips.length
+    ? trips.map(tripCard).join('') + '<button class="wide share" data-share="all">💬 전체 결과 카톡으로 공유</button>'
     : '<div class="empty">켜진 여행이 없어요. [여행] 탭에서 추가해 주세요.</div>';
+}
+
+// ---------- 카톡 공유용 글 ----------
+function shareDate(last) {
+  const at = new Date(last.at);
+  return `${at.getMonth() + 1}/${at.getDate()} ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+}
+
+function shareTrip(t, withLink = true) {
+  const f = t.flight;
+  const lines = [`📍 ${t.name} (${t.route.replace(/\s/g, '')}) · ${t.travelers}`];
+  if (!f) return lines.concat('  항공권 결과 없음').join('\n');
+  lines.push(`🗓 ${f.outbound} → ${f.inbound} (${f.nights}박)`);
+  const stops = f.stops === 0 ? '직항' : `경유 ${f.stops}회`;
+  lines.push(`🛫 항공 ${money(f.price)} (왕복·전원) · ${f.airlines} ${stops}${f.numbers ? ' ' + f.numbers : ''}${f.depart ? ' · 출발 ' + f.depart : ''}`);
+  const h = (t.hotels || [])[0];
+  if (h) lines.push(`🏨 ${h.name} ${money(h.total)} (1박 ${money(h.perNight)}${h.rating ? `, ⭐${h.rating}` : ''})`);
+  if (t.total != null && h) {
+    const d = t.totalDelta;
+    lines.push(`💰 합계 ${money(t.total)}${typeof d === 'number' && d ? ` (어제보다 ${d < 0 ? '▼' : '▲'}${money(Math.abs(d))})` : ''}`);
+  }
+  if (t.others && t.others.length) {
+    lines.push('다른 날짜: ' + t.others.slice(0, 3).map((o) => `${o.label} ${money(o.price)}`).join(', '));
+  }
+  if (withLink && t.flightsUrl) lines.push(`🔗 ${t.flightsUrl}`);
+  return lines.join('\n');
+}
+
+function shareText(which) {
+  const last = state.last;
+  const trips = last.trips || [];
+  const head = `✈️ 여행 가격 (${shareDate(last)} 기준)` + (last.demo ? ' ※체험 모드 가짜 가격' : '');
+  const body = which === 'all'
+    ? trips.map((t) => shareTrip(t, trips.length <= 3)).join('\n\n')
+    : shareTrip(trips[+which]);
+  return `${head}\n\n${body}\n\n※ 구글 항공권/호텔 기준 가격, 예약 전 확인 필요`;
 }
 
 function tripCard(t, i) {
@@ -175,7 +212,7 @@ function tripCard(t, i) {
     });
   }
   (t.errors || []).forEach((e) => { h += `<div class="err">⚠️ ${esc(e)}</div>`; });
-  const links = [];
+  const links = [`<button class="share" data-share="${i}">💬 카톡 공유</button>`];
   if (t.flightsUrl) links.push(`<button data-url="${esc(t.flightsUrl)}">구글 항공권에서 보기</button>`);
   const hl = (t.hotels || [])[0];
   if (hl && hl.link) links.push(`<button data-url="${esc(hl.link)}">호텔 보기</button>`);
@@ -435,6 +472,13 @@ function startSearch(withNotification) {
 }
 $('#run').onclick = () => startSearch(false);
 $('#results').addEventListener('click', (e) => {
+  const s = e.target.closest('[data-share]');
+  if (s) {
+    const text = shareText(s.dataset.share);
+    if (T.share) T.share(text);
+    else if (navigator.share) navigator.share({ text });
+    return;
+  }
   const b = e.target.closest('[data-url]');
   if (b) T.openUrl(b.dataset.url);
 });

@@ -83,3 +83,4 @@ label.check input { width: 22px; height: 22px; min-height: 0; margin: 0; flex: n
 .toast { position: fixed; left: 16px; right: 16px; bottom: 84px; background: var(--text); color: var(--bg); padding: 12px 14px; border-radius: 12px; text-align: center; z-index: 5; }
 .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s .8s linear infinite; vertical-align: -2px; }
 @keyframes s { to { transform: rotate(360deg); } }
+button.share { background: #fee500; border-color: #fee500; color: #191919; font-weight: 600; }
