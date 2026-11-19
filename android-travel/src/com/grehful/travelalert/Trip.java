@@ -38,6 +38,20 @@ final class Trip {
         return maxStops < 0 ? 0 : maxStops + 1;
     }
 
+    /** 항공 요금 기준 성인 수 (만 12세 이상 아이는 성인 요금). */
+    int flightAdults() {
+        int n = adults;
+        for (int a : childAges) if (a >= 12) n++;
+        return n;
+    }
+
+    /** 항공 요금 기준 아동 수 (만 2~11세, 좌석 사용). */
+    int flightChildren() {
+        int n = 0;
+        for (int a : childAges) if (a < 12) n++;
+        return n;
+    }
+
     String travelersLabel() {
         StringBuilder sb = new StringBuilder("성인 ").append(adults);
         if (childAges.length > 0) sb.append(" · 아동 ").append(childAges.length);
@@ -45,8 +59,12 @@ final class Trip {
         return sb.toString();
     }
 
+    /** 가격 기록을 구분하는 키. 인원·좌석·경유·항공사가 바뀌면 예전 가격과 섞이지 않게 새로 시작한다. */
     String key() {
-        return name + "|" + origin + "-" + destination + "|" + Day.iso(departFrom) + "~" + Day.iso(departTo);
+        StringBuilder ages = new StringBuilder();
+        for (int a : childAges) ages.append(a).append('.');
+        return name + "|" + origin + "-" + destination + "|" + Day.iso(departFrom) + "~" + Day.iso(departTo)
+                + "|" + adults + "a" + ages + "c" + infants + "i|" + cabin + "|" + maxStops + "|" + Prices.join(airlines);
     }
 
     /** 기간 안의 모든 {출발일, 귀국일} 조합 (오늘 이후 출발만). */
@@ -220,6 +238,12 @@ final class Trip {
             trip.infants = tr.optInt("infants", 0);
         }
         if (trip.adults < 1) throw new JSONException(err + "성인은 최소 1명");
+        for (int a : trip.childAges) {
+            if (a < 2 || a > 17) throw new JSONException(err + "아동 나이는 만 2~17세 (2세 미만은 유아)");
+        }
+        if (trip.infants > trip.adults) {
+            throw new JSONException(err + "유아(무릎)는 성인 1명당 1명까지예요. 2세 이상이면 아동으로 넣어 주세요");
+        }
 
         JSONArray al = t.optJSONArray("airlines");
         if (al != null) {

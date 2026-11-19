@@ -61,6 +61,19 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(c.trips[0].nights, [5])
         self.assertEqual(c.trips[0].travelers.children, 2)
 
+    def test_children_and_infants(self):
+        t = trip(travelers={"adults": 2, "children_ages": [4, 7, 13], "infants": 1}).travelers
+        self.assertEqual((t.flight_adults, t.flight_children), (3, 2))
+        self.assertEqual(t.label(), "성인 2 · 아동 3 · 유아 1")
+        from travelalert.report import trip_key_of
+        a = trip(travelers={"adults": 2, "infants": 2})
+        b = trip(travelers={"adults": 2, "children_ages": [5, 7]})
+        self.assertNotEqual(trip_key_of(a), trip_key_of(b))  # 인원이 바뀌면 가격 기록 새로
+        with self.assertRaises(ValueError):
+            trip(travelers={"adults": 1, "infants": 2})
+        with self.assertRaises(ValueError):
+            trip(travelers={"adults": 1, "children_ages": [1]})
+
     def test_invalid_values(self):
         with self.assertRaises(ValueError):
             trip(cabin="vip")

@@ -77,11 +77,14 @@
 
       <h3>인원</h3>
       <div class="grid3">
-        <label>성인 <input type="number" name="adults" min="1" max="9" value="2"></label>
-        <label>유아(2세↓) <input type="number" name="infants" min="0" max="4" value="0"></label>
-        <label>방 개수 <input type="number" name="rooms" min="1" max="5" value="1"></label>
+        <label>성인<br><span class="small">만 12세 이상</span> <input type="number" name="adults" min="1" max="9" value="2"></label>
+        <label>아동<br><span class="small">만 2~11세 (좌석)</span> <input type="number" name="children" min="0" max="8" value="0"></label>
+        <label>유아<br><span class="small">만 2세 미만 (무릎)</span> <input type="number" name="infants" min="0" max="4" value="0"></label>
       </div>
-      <label>아이 나이 (쉼표로, 없으면 비움) <input name="children_ages" inputmode="numeric" placeholder="7,10"></label>
+      <div id="child-ages" class="ages"></div>
+      <p class="muted small">아동은 좌석을 쓰는 아동 요금, 유아는 좌석 없이 어른 무릎에 앉는 요금이에요(성인 1명당 유아 1명까지).
+        만 12세 이상은 항공 요금이 성인과 같아서 성인으로 넣어 주세요.</p>
+      <label>방 개수 <input type="number" name="rooms" min="1" max="5" value="1"></label>
 
       <h3>날짜 조합 검색</h3>
       <p class="muted small">출발 가능 기간 안의 <b>모든 출발일 × 박수</b> 조합 중 최저가를 찾아요.</p>

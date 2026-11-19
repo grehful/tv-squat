@@ -24,12 +24,14 @@ final class DemoClient implements Prices.Client {
     @Override
     public JSONObject flights(Trip t, int outbound, int inbound) throws JSONException {
         synchronized (this) { calls++; }
+        // 실제처럼: 성인·아동은 좌석 요금, 유아(무릎)는 성인 요금의 10%
         int people = t.adults + t.childAges.length;
         int base = 250_000 + n(t.destination) % 900_000;
         String[] airlines = t.airlines.length > 0 ? t.airlines : new String[]{"대한항공", "아시아나항공", "제주항공"};
         JSONArray best = new JSONArray(), other = new JSONArray();
         for (int i = 0; i < airlines.length; i++) {
-            int price = (base + n(t.destination, outbound, inbound, airlines[i], today) % 200_000) * people / 100 * 100;
+            int seat = base + n(t.destination, outbound, inbound, airlines[i], today) % 200_000;
+            int price = (seat * people + seat * t.infants / 10) / 100 * 100;
             JSONObject leg = new JSONObject()
                     .put("airline", airlines[i])
                     .put("flight_number", "DEMO " + (100 + i * 7))

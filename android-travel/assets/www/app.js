@@ -300,7 +300,9 @@ function openEditor(i) {
   f.max_stops.value = t.max_stops === null || t.max_stops === undefined ? '' : String(t.max_stops);
   f.adults.value = t.travelers.adults;
   f.infants.value = t.travelers.infants || 0;
-  f.children_ages.value = (t.travelers.children_ages || []).join(',');
+  childAges = (t.travelers.children_ages || []).slice();
+  f.children.value = childAges.length;
+  renderChildAges();
   f.rooms.value = t.rooms || 1;
   f.hotel.checked = t.hotel !== false;
   f.search_all.checked = !(t.max_searches > 0);
@@ -311,6 +313,23 @@ function openEditor(i) {
   renderChips();
   show('edit');
 }
+
+// 아동 나이 (아동 수만큼 나이 선택칸)
+let childAges = [];
+function renderChildAges() {
+  const f = $('#trip-form');
+  const n = Math.max(0, Math.min(8, +f.children.value || 0));
+  while (childAges.length < n) childAges.push(7);
+  childAges.length = n;
+  const opts = (sel) => Array.from({ length: 10 }, (_, k) => k + 2)
+    .map((a) => `<option value="${a}" ${a === sel ? 'selected' : ''}>만 ${a}세</option>`).join('');
+  $('#child-ages').innerHTML = childAges.map((a, k) =>
+    `<label>아동 ${k + 1} 나이 <select data-age="${k}">${opts(Math.min(11, Math.max(2, a)))}</select></label>`).join('');
+}
+$('#child-ages').addEventListener('change', (e) => {
+  const s = e.target.closest('[data-age]');
+  if (s) childAges[+s.dataset.age] = +s.value;
+});
 
 function nums(s) {
   return s.split(/[,\s]+/).filter(Boolean).map(Number);
@@ -360,7 +379,10 @@ $('#airline-chips').addEventListener('click', (e) => {
   f.airlines.value = al.join(',');
   renderChips();
 });
-$('#trip-form').addEventListener('input', renderChips);
+$('#trip-form').addEventListener('input', (e) => {
+  if (e.target.name === 'children') renderChildAges();
+  renderChips();
+});
 $('#trip-form').addEventListener('change', renderChips);
 
 $('#trip-form').addEventListener('submit', (e) => {
@@ -378,7 +400,7 @@ $('#trip-form').addEventListener('submit', (e) => {
     airlines: f.airlines.value.toUpperCase().split(/[,\s]+/).filter(Boolean),
     cabin: f.cabin.value,
     max_stops: ms === '' ? null : +ms,
-    travelers: { adults: +f.adults.value || 1, children_ages: nums(f.children_ages.value), infants: +f.infants.value || 0 },
+    travelers: { adults: +f.adults.value || 1, children_ages: childAges.slice(), infants: +f.infants.value || 0 },
     rooms: +f.rooms.value || 1,
     hotel: f.hotel.checked,
     max_searches: f.search_all.checked ? 0 : (+f.max_searches.value || 1),
@@ -386,7 +408,7 @@ $('#trip-form').addEventListener('submit', (e) => {
   };
   const err = $('#form-error');
   if (trip.nights.some((n) => !Number.isInteger(n) || n < 1)) { err.textContent = '몇 박은 1 이상의 숫자로 입력하세요 (예: 3,4)'; err.classList.remove('hidden'); return; }
-  if (trip.travelers.children_ages.some((n) => !Number.isInteger(n) || n < 2 || n > 17)) { err.textContent = '아이 나이는 2~17 숫자로 입력하세요 (2세 미만은 유아 칸에)'; err.classList.remove('hidden'); return; }
+  if (trip.travelers.infants > trip.travelers.adults) { err.textContent = '유아(무릎)는 성인 1명당 1명까지예요. 2세 이상이면 아동으로 넣어 주세요.'; err.classList.remove('hidden'); return; }
   const before = config.trips.slice();
   if (editing >= 0) config.trips[editing] = trip; else config.trips.push(trip);
   const msg = T.saveConfig(JSON.stringify(config));

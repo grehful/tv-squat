@@ -174,6 +174,15 @@ public class EngineTest {
             api.baseUrl = base;
             api.retryDelayMs = 1;
             eq(Prices.parseFlights(api.flights(t, d, d + 5), d, d + 5).size(), 1, "flights via http");
+            t.adults = 2;
+            t.childAges = new int[]{5, 9};
+            t.infants = 1;
+            api.flights(t, d, d + 5);
+            String fq = queries.get(queries.size() - 1);
+            check(fq.contains("adults=2") && fq.contains("children=2") && fq.contains("infants_on_lap=1"), "family params " + fq);
+            t.adults = 1;
+            t.childAges = new int[0];
+            t.infants = 0;
             // 결과 없음은 오류가 아니라 빈 결과
             t.destination = "NONE";
             JSONObject none = api.flights(t, d, d + 5);
@@ -377,6 +386,23 @@ public class EngineTest {
         check(s[0].startsWith("✈️ 11/12(목) 여행 가격 · "), "title " + s[0]);
         eq(s[1].split("\n").length, 3, "summary lines");
         if (args.length > 1) Files.write(Paths.get(args[1]), r2.put("at", 1762956000000L).put("demo", true).toString().getBytes("UTF-8"));
+
+        // 인원: 아동(2~11세)은 아동 요금, 12세 이상은 성인 요금, 유아는 성인 수까지
+        Trip fam = Trip.parseAll(new JSONObject("{\"trips\":[{\"name\":\"a\",\"destination\":\"BKK\",\"depart_from\":\"2027-01-05\","
+                + "\"travelers\":{\"adults\":2,\"children_ages\":[4,7,13],\"infants\":1}}]}")).get(0);
+        eq(fam.flightAdults(), 3, "13-year-old counts as adult");
+        eq(fam.flightChildren(), 2, "2-11 children");
+        eq(fam.travelersLabel(), "성인 2 · 아동 3 · 유아 1", "label");
+        String k1 = fam.key();
+        fam.infants = 0;
+        check(!k1.equals(fam.key()), "travelers change resets price records");
+        try {
+            Trip.parseAll(new JSONObject("{\"trips\":[{\"name\":\"a\",\"destination\":\"BKK\",\"depart_from\":\"2027-01-05\","
+                    + "\"travelers\":{\"adults\":1,\"infants\":2}}]}"));
+            check(false, "more lap infants than adults should fail");
+        } catch (org.json.JSONException expected) {
+            check(expected.getMessage().contains("성인 1명당"), "infant message");
+        }
 
         serpApiTests();
         networkTests(root);

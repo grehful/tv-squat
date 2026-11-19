@@ -260,8 +260,8 @@ final class Prices {
             p.put("outbound_date", Day.iso(outbound));
             p.put("return_date", Day.iso(inbound));
             p.put("type", 1);
-            p.put("adults", t.adults);
-            p.put("children", t.childAges.length);
+            p.put("adults", t.flightAdults());
+            p.put("children", t.flightChildren()); // 만 2~11세 아동 요금 (좌석)
             p.put("infants_on_lap", t.infants);
             p.put("travel_class", t.cabinCode());
             p.put("stops", t.stopsCode());

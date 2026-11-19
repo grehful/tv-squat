@@ -156,8 +156,8 @@ class SerpApiClient:
             "outbound_date": outbound.isoformat(),
             "return_date": inbound.isoformat(),
             "type": 1,  # 왕복
-            "adults": trip.travelers.adults,
-            "children": trip.travelers.children,
+            "adults": trip.travelers.flight_adults,
+            "children": trip.travelers.flight_children,  # 만 2~11세 아동 요금 (좌석)
             "infants_on_lap": trip.travelers.infants,
             "travel_class": CABINS[trip.cabin],
             "stops": STOPS[trip.max_stops],

@@ -22,6 +22,16 @@ class Travelers:
     def children(self) -> int:
         return len(self.children_ages)
 
+    @property
+    def flight_adults(self) -> int:
+        """항공 요금 기준 성인 수 (만 12세 이상 아이는 성인 요금)."""
+        return self.adults + sum(1 for a in self.children_ages if a >= 12)
+
+    @property
+    def flight_children(self) -> int:
+        """항공 요금 기준 아동 수 (만 2~11세, 좌석 사용)."""
+        return sum(1 for a in self.children_ages if a < 12)
+
     def label(self) -> str:
         parts = [f"성인 {self.adults}"]
         if self.children:
@@ -127,6 +137,10 @@ def _travelers(raw: dict | None, default: Travelers | None = None) -> Travelers:
     )
     if t.adults < 1:
         raise ValueError("성인은 최소 1명이어야 합니다")
+    if any(a < 2 or a > 17 for a in t.children_ages):
+        raise ValueError("아동 나이는 만 2~17세 (2세 미만은 infants)")
+    if t.infants > t.adults:
+        raise ValueError("유아(무릎)는 성인 1명당 1명까지예요. 2세 이상이면 children_ages 로 넣어 주세요")
     return t
 
 

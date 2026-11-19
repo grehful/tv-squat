@@ -41,7 +41,11 @@ def _delta(now: int | None, before: int | None, currency: str) -> str:
 
 
 def trip_key_of(t) -> str:
-    return f"{t.name}|{t.origin}-{t.destination}|{t.depart_from}~{t.depart_to}"
+    """가격 기록을 구분하는 키. 인원·좌석·경유·항공사가 바뀌면 예전 가격과 섞이지 않게 새로 시작한다."""
+    tr = t.travelers
+    ages = "".join(f"{a}." for a in tr.children_ages)
+    return (f"{t.name}|{t.origin}-{t.destination}|{t.depart_from}~{t.depart_to}"
+            f"|{tr.adults}a{ages}c{tr.infants}i|{t.cabin}|{t.max_stops}|{','.join(t.airlines)}")
 
 
 def trip_key(r: TripResult) -> str:
